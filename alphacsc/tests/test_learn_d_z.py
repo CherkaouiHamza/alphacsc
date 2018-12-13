@@ -220,7 +220,7 @@ def test_update_d_sample_weights():
                           sample_weights=sample_weights)
         d_hat_list.append(d_hat)
     for d_hat in d_hat_list[1:]:
-        assert np.allclose(d_hat, d_hat_list[0], rtol=1e-5)
+        assert np.allclose(d_hat, d_hat_list[0], rtol=1e-4)
 
     # And using no sample weights should give different results
     for func_d in func_d_list:

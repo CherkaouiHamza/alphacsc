@@ -1,8 +1,8 @@
 import time
 
 import numpy as np
-from scipy import optimize
-
+from scipy.optimize import nnls
+from scipy.optimize.linesearch import line_search_armijo
 from .compute_constants import compute_DtD
 from . import check_random_state
 
@@ -36,7 +36,7 @@ def _support_least_square(X, uv, z, debug=False):
             lhs[i] = np.dot(uv[k_i, n_channels:], aux_i)
 
         # Solve the non-negative least-square with nnls
-        z_star, a = optimize.nnls(rhs, lhs)
+        z_star, a = nnls(rhs, lhs)
         for i, (k_i, t_i) in enumerate(zip(*support_i)):
             z_hat[k_i, idx, t_i] = z_star[i]
 
@@ -45,7 +45,7 @@ def _support_least_square(X, uv, z, debug=False):
 
 def fista(f_obj, f_grad, f_prox, step_size, x0, max_iter, verbose=0,
           momentum=False, eps=None, adaptive_step_size=False, debug=False,
-          scipy_line_search=True, name='ISTA', timing=False, restart=None):
+          scipy_line_search=True, name='ISTA', timing=False):
     """ISTA and FISTA algorithm
 
     Parameters
@@ -76,8 +76,6 @@ def fista(f_obj, f_grad, f_prox, step_size, x0, max_iter, verbose=0,
     timing : boolean
         If True, compute the objective function at each step, and the duration
         of each step, and return both lists at the end.
-    restart : int or None
-        If not None, restart the momentum every `restart` iterations.
 
     Returns
     -------
@@ -99,49 +97,54 @@ def fista(f_obj, f_grad, f_prox, step_size, x0, max_iter, verbose=0,
         step_size = 1.
     if eps is None:
         eps = np.finfo(np.float32).eps
-    obj_uv = None
+    obj_ = None
 
+    pobj = [f_obj(x0)]
     tk = 1.0
     x_hat = x0.copy()
     x_hat_aux = x_hat.copy()
     grad = np.empty(x_hat.shape)
     diff = np.empty(x_hat.shape)
-    for ii in range(max_iter):
-        # restart every n iterations
-        if restart is not None and ii > 0 and (ii % restart) == 0:
-            x_hat_aux = x_hat.copy()
-            tk = 1.0
 
+    for ii in range(max_iter):
+        has_restarted = False
+
+        # Compute the gradient
         grad[:] = f_grad(x_hat_aux)
 
         if adaptive_step_size:
+
             if scipy_line_search:
 
                 def f_obj_(x_hat):
                     x_hat = np.reshape(x_hat, x0.shape)
                     return f_obj(f_prox(x_hat))
 
-                step_size, _, obj_uv = optimize.linesearch.line_search_armijo(
-                    f_obj_, x_hat.ravel(), -grad.ravel(), grad.ravel(), obj_uv,
+                step_size, _, obj_ = line_search_armijo(
+                    f_obj_, x_hat.ravel(), -grad.ravel(), grad.ravel(), obj_,
                     c1=1e-5, alpha0=step_size)
                 if step_size is None:
-                    step_size = 0
-                x_hat_aux -= step_size * grad
-                x_hat_aux = f_prox(x_hat_aux)
+                    step_size = 0.0
+                x_hat_aux = f_prox(x_hat_aux - step_size * grad)
 
             else:
 
                 def f(step_size):
-                    x_hat = f_prox(x_hat_aux - step_size * grad)
+                    x_hat = f_prox(x_hat_aux - step_size * grad, step_size)
                     pobj = f_obj(x_hat)
                     return pobj, x_hat
 
-                obj_uv, x_hat_aux, step_size = _adaptive_step_size(
-                    f, obj_uv, alpha=step_size)
+                obj_, x_hat_aux, step_size = _adaptive_step_size(
+                    f, obj_, alpha=step_size)
+                if step_size < 1e-20:
+                    # We did not find a possible step size. We should restart
+                    # the momentum.
+                    x_hat_aux = x_hat
+                    if momentum:
+                        has_restarted = True
 
         else:
-            x_hat_aux -= step_size * grad
-            x_hat_aux = f_prox(x_hat_aux)
+            x_hat_aux = f_prox(x_hat_aux - step_size * grad, step_size)
 
         diff[:] = x_hat_aux - x_hat
         x_hat[:] = x_hat_aux
@@ -152,16 +155,19 @@ def fista(f_obj, f_grad, f_prox, step_size, x0, max_iter, verbose=0,
 
         if debug:
             pobj.append(f_obj(x_hat))
+            if adaptive_step_size:
+                assert len(pobj) < 2 or pobj[-1] > pobj[-2]
         if timing:
             times.append(time.time() - start)
             pobj.append(f_obj(x_hat))
             start = time.time()
 
         f = np.sum(abs(diff))
-        if f <= eps:
+        if f <= eps and not has_restarted:
             break
         if f > 1e50:
-            raise RuntimeError("The D update have diverged.")
+            raise RuntimeError("{} have diverged during '{}'.".format(
+                "FISTA" if momentum else "ISTA", name))
     else:
         if verbose > 1:
             print('[{}] update did not converge'.format(name))

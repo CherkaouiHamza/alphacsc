@@ -69,7 +69,9 @@ def init_dictionary(X, n_atoms, n_times_atom, uv_constraint='separate',
 
     if isinstance(D_init, np.ndarray):
         D_hat = D_init.copy()
-        assert D_hat.shape == D_shape
+        msg = "Wrong shape for D init.: expectd {}, got {}".format(D_shape,
+                                                                   D_hat.shape)
+        assert D_hat.shape == D_shape, msg
 
     elif D_init is None or D_init == "random":
         D_hat = rng.randn(*D_shape)

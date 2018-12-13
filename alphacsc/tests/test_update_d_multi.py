@@ -140,7 +140,8 @@ def test_gradient_uv(loss):
 
 
 @pytest.mark.parametrize('solver_d, uv_constraint', [
-    ('joint', 'joint'), ('alternate', 'separate')
+    ('joint', 'joint'), ('alternate', 'separate'),
+    ('alternate_adaptive', 'separate')
 ])
 def test_update_uv(solver_d, uv_constraint):
     # Generate synchronous D

@@ -5,7 +5,20 @@
 
 import numpy as np
 
+try:
+    from nipype.algorithms.modelgen import spm_hrf
+except ImportError:
+    raise ImportError("Please install nipype to run fMRI example.")
+
 from .utils import check_random_state, construct_X
+
+
+def hrf(n_times_atom):
+        _hrf = spm_hrf(60./n_times_atom)
+        if len(_hrf) != n_times_atom:
+            # force _hrf to be n_times_atom long
+            _hrf = np.hstack([_hrf, np.zeros(np.abs(len(_hrf) - n_times_atom))])
+        return _hrf
 
 
 def simulate_data(n_trials, n_times, n_times_atom, n_atoms, random_state=42,

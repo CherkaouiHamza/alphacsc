@@ -3,6 +3,7 @@
 #          Umut Simsekli <umut.simsekli@telecom-paristech.fr>
 #          Alexandre Gramfort <alexandre.gramfort@inria.fr>
 #          Thomas Moreau <thomas.moreau@inria.fr>
+#          Hamza Cherkaoui <hamza.cherkaoui@inria.fr>
 
 import numpy as np
 
@@ -17,7 +18,8 @@ from .loss_and_gradient import compute_objective, compute_X_and_objective_multi
 from .loss_and_gradient import gradient_uv, gradient_d
 
 
-def prox_uv(uv, uv_constraint='joint', n_channels=None, return_norm=False):
+def prox_uv(uv, uv_constraint='joint', n_channels=None,
+            return_norm=False):
     if uv_constraint == 'joint':
         norm_uv = np.maximum(1, np.linalg.norm(uv, axis=1))
         uv /= norm_uv[:, None]
@@ -96,8 +98,7 @@ def update_uv(X, z, uv_hat0, constants=None, b_hat_0=None, debug=False,
     uv_hat : array, shape (n_atoms, n_channels + n_times_atom)
         The atoms to learn from the data.
     """
-    n_trials, n_atoms, n_times_valid = get_z_shape(z)
-    _, n_channels, n_times = X.shape
+    _, n_channels, _ = X.shape
     n_times_atom = uv_hat0.shape[1] - n_channels
 
     if window:
@@ -136,7 +137,7 @@ def update_uv(X, z, uv_hat0, constants=None, b_hat_0=None, debug=False,
                 grad[:, n_channels:] *= tukey_window_
             return grad
 
-        def prox(uv):
+        def prox(uv, step_size=1.0):
             if window:
                 uv[:, n_channels:] *= tukey_window_
             uv = prox_uv(uv, uv_constraint=uv_constraint,
@@ -150,19 +151,21 @@ def update_uv(X, z, uv_hat0, constants=None, b_hat_0=None, debug=False,
                              adaptive_step_size=True, debug=debug,
                              name="Update uv")
 
-    elif solver_d in ['alternate', 'alternate_adaptive']:
+    elif solver_d in ['alternate', 'alternate_adaptive', 'only_u',
+                      'only_u_adaptive']:
         # use FISTA on alternate u and v
 
-        adaptive_step_size = (solver_d == 'alternate_adaptive')
+        adaptive_step_size = 'adaptive' in solver_d
 
         uv_hat = uv_hat0.copy()
         u_hat, v_hat = uv_hat[:, :n_channels], uv_hat[:, n_channels:]
 
-        def prox_u(u):
-            u /= np.maximum(1., np.linalg.norm(u, axis=1))[:, None]
+        def prox_u(u, step_size=1.0):  # step_size=1.0: code legacy
+            # u = np.maximum(0.0, u)  # XXX
+            u /= np.maximum(1.0, np.linalg.norm(u, axis=1))[:, None]
             return u
 
-        def prox_v(v):
+        def prox_v(v, step_size=1.0):  # step_size=1.0: code legacy
             if window:
                 v *= tukey_window_
             v /= np.maximum(1., np.linalg.norm(v, axis=1))[:, None]
@@ -170,44 +173,47 @@ def update_uv(X, z, uv_hat0, constants=None, b_hat_0=None, debug=False,
                 v /= tukey_window_
             return v
 
-        pobj = []
-        for jj in range(1):
-            # ---------------- update u
+        pobj = []  # for debug
 
-            def obj(u):
-                uv = np.c_[u, v_hat]
-                return objective(uv)
+        # update u
+        def _obj_u(u):
+            uv = np.c_[u, v_hat]
+            return objective(uv)
 
-            def grad_u(u):
-                if window:
-                    uv = np.c_[u, v_hat * tukey_window_]
-                else:
-                    uv = np.c_[u, v_hat]
-                grad_d = gradient_d(uv, X=X, z=z, constants=constants,
-                                    loss=loss, loss_params=loss_params)
-                return (grad_d * uv[:, None, n_channels:]).sum(axis=2)
-
-            if adaptive_step_size:
-                Lu = 1
+        def _grad_u(u):
+            if window:
+                uv = np.c_[u, v_hat * tukey_window_]
             else:
-                Lu = compute_lipschitz(uv_hat, constants, 'u', b_hat_0)
-            assert Lu > 0
+                uv = np.c_[u, v_hat]
+            grad_d = gradient_d(uv, X=X, z=z, constants=constants,
+                                loss=loss, loss_params=loss_params)
+            return (grad_d * uv[:, None, n_channels:]).sum(axis=2)
 
-            u_hat, pobj_u = fista(obj, grad_u, prox_u, 0.99 / Lu, u_hat,
-                                  max_iter, momentum=momentum, eps=eps,
-                                  adaptive_step_size=adaptive_step_size,
-                                  verbose=verbose, debug=debug,
-                                  name="Update u")
-            uv_hat = np.c_[u_hat, v_hat]
-            if debug:
-                pobj.extend(pobj_u)
+        if adaptive_step_size:
+            Lu = 1
+        else:
+            Lu = compute_lipschitz(uv_hat, constants, 'u', b_hat_0)
+        assert Lu > 0
 
-            # ---------------- update v
-            def obj(v):
+        u_hat, pobj_u = fista(_obj_u, _grad_u, prox_u, 0.99 / Lu, u_hat,
+                              max_iter, momentum=momentum, eps=eps,
+                              adaptive_step_size=adaptive_step_size,
+                              scipy_line_search=False,
+                              verbose=verbose, debug=debug,
+                              name="Update u")
+
+        uv_hat = np.c_[u_hat, v_hat]
+        if debug:
+            assert pobj_u[-1] <= pobj_u[0]
+            pobj.extend(pobj_u)
+
+        # update v
+        if solver_d not in ['only_u', 'only_u_adaptive']:
+            def _obj_v(v):
                 uv = np.c_[u_hat, v]
                 return objective(uv)
 
-            def grad_v(v):
+            def _grad_v(v):
                 if window:
                     v = v * tukey_window_
                 uv = np.c_[u_hat, v]
@@ -224,11 +230,11 @@ def update_uv(X, z, uv_hat0, constants=None, b_hat_0=None, debug=False,
                 Lv = compute_lipschitz(uv_hat, constants, 'v', b_hat_0)
             assert Lv > 0
 
-            v_hat, pobj_v = fista(obj, grad_v, prox_v, 0.99 / Lv, v_hat,
-                                  max_iter, momentum=momentum, eps=eps,
-                                  adaptive_step_size=adaptive_step_size,
-                                  verbose=verbose, debug=debug,
-                                  name="Update v")
+            v_hat, pobj_v = fista(
+                            _obj_v, _grad_v, prox_v, 0.99 / Lv,
+                            v_hat, max_iter, momentum=momentum,
+                            eps=eps, adaptive_step_size=adaptive_step_size,
+                            verbose=verbose, debug=debug, name="Update v")
             uv_hat = np.c_[u_hat, v_hat]
             if debug:
                 pobj.extend(pobj_v)
@@ -286,9 +292,7 @@ def update_d(X, z, D_hat0, constants=None, b_hat_0=None, debug=False,
     D_hat : array, shape (n_atoms, n_channels, n_times_atom)
         The atoms to learn from the data.
     """
-    n_trials, n_atoms, n_times_valid = get_z_shape(z)
-    _, n_channels, n_times = X.shape
-    n_atoms, n_channels, n_times_atom = D_hat0.shape
+    _, _, n_times_atom = D_hat0.shape
 
     if window:
         tukey_window_ = tukey_window(n_times_atom)[None, None, :]
@@ -317,7 +321,7 @@ def update_d(X, z, D_hat0, constants=None, b_hat_0=None, debug=False,
                 grad *= tukey_window_
             return grad
 
-        def prox(D):
+        def prox(D, step_size=1.0):
             if window:
                 D *= tukey_window_
             D = prox_d(D)
@@ -342,8 +346,8 @@ def update_d(X, z, D_hat0, constants=None, b_hat_0=None, debug=False,
 
 
 def _get_d_update_constants(X, z):
-    n_trials, n_atoms, n_times_valid = get_z_shape(z)
-    n_trials, n_channels, n_times = X.shape
+    _, _, n_times_valid = get_z_shape(z)
+    _, _, n_times = X.shape
     n_times_atom = n_times - n_times_valid + 1
 
     if is_list_of_lil(z):

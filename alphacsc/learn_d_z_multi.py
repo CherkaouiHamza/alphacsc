@@ -3,6 +3,7 @@
 #          Umut Simsekli <umut.simsekli@telecom-paristech.fr>
 #          Alexandre Gramfort <alexandre.gramfort@inria.fr>
 #          Thomas Moreau <thomas.moreau@inria.fr>
+#          Hamza Cherkaoui <hamza.cherkaoui@inria.fr>
 
 from __future__ import print_function
 import time
@@ -21,11 +22,15 @@ from .update_z_multi import update_z_multi
 from .update_d_multi import update_uv, update_d
 
 
+_default_dict_values = {'gamma': 0.1, 'sakoe_chiba_band': 10, 'ordar': 10,
+                        'block': False}
+
+
 def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
                     lmbd_max='fixed', reg=0.1, loss='l2',
-                    loss_params=dict(gamma=.1, sakoe_chiba_band=10, ordar=10),
-                    rank1=True, uv_constraint='separate', eps=1e-10,
-                    algorithm='batch', algorithm_params=dict(),
+                    loss_params=dict(**_default_dict_values),
+                    rank1=True, uv_constraint='separate', positivity=True,
+                    eps=1e-10, algorithm='batch', algorithm_params=dict(),
                     detrending=None, detrending_params=dict(),
                     solver_z='l-bfgs', solver_z_kwargs=dict(),
                     solver_d='alternate_adaptive', solver_d_kwargs=dict(),
@@ -70,6 +75,8 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
         The kind of norm constraint on the atoms:
         If 'joint', the constraint is norm_2([u, v]) <= 1
         If 'separate', the constraint is norm_2(u) <= 1 and norm_2(v) <= 1
+    positivity : boolean
+        If True z entries will be constraint to be positives.
     eps : float
         Stopping criterion. If the cost descent after a uv and a z update is
         smaller than eps, return.
@@ -101,7 +108,8 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
         Additional keyword arguments to pass to update_z_multi
     solver_d : str
         The solver to use for the d update. Options are
-        'alternate' | 'alternate_adaptive' (default) | 'joint'
+        'alternate' | 'alternate_adaptive' (default) | 'joint' | 'fista' |
+        'only_u' | 'only_u_adaptive'
     solver_d_kwargs : dict
         Additional keyword arguments to provide to update_d
     D_init : str or array, shape (n_atoms, n_channels + n_times_atoms) or \
@@ -181,7 +189,8 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
         return update_z_multi(X, D_hat, reg=reg, z0=z_hat,
                               solver=solver_z, solver_kwargs=z_kwargs,
                               loss=loss, loss_params=loss_params,
-                              n_jobs=n_jobs, return_ztz=True)
+                              positivity=positivity, n_jobs=n_jobs,
+                              return_ztz=True)
 
     def obj_func(X, z_hat, D_hat, reg=None, return_X_hat=False):
         return compute_X_and_objective_multi(X, z_hat, D_hat,
@@ -482,11 +491,11 @@ def get_iteration_func(eps, stopping_pobj, callback, lmbd_max, name, verbose,
             if dz < 0 and raise_on_increase:
                 raise RuntimeError(
                     "The z update have increased the objective value by {}."
-                    .format(dz))
+                    .format(-dz))
             if du < -1e-10 and dz > 1e-12 and raise_on_increase:
                 raise RuntimeError(
                     "The d update have increased the objective value by {}."
-                    "(dz={})".format(du, dz))
+                    "(dz={})".format(du, -dz))
             if dz < eps and du < eps:
                 if verbose == 1:
                     print("")

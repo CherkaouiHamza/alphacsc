@@ -3,6 +3,7 @@
 #          Umut Simsekli <umut.simsekli@telecom-paristech.fr>
 #          Alexandre Gramfort <alexandre.gramfort@inria.fr>
 #          Thomas Moreau <thomas.moreau@inria.fr>
+#          Hamza Cherkaoui <hamza.cherkaoui@inria.fr>
 
 import numpy as np
 
@@ -67,9 +68,15 @@ def compute_objective(X=None, X_hat=None, z_hat=None, D=None,
 
     if reg is not None:
         if isinstance(reg, (int, float)):
-            obj += reg * safe_sum(z_hat)
+            if loss_params.get("block", False):
+                obj += reg * safe_sum(np.abs(z_hat))
+            else:
+                obj += reg * safe_sum(z_hat)
         else:
-            obj += np.sum(reg * safe_sum(z_hat, axis=(1, 2)))
+            if loss_params.get("block", False):
+                obj += np.sum(reg * safe_sum(np.abs(z_hat), axis=(1, 2)))
+            else:
+                obj += np.sum(reg * safe_sum(z_hat, axis=(1, 2)))
 
     return obj
 
@@ -121,7 +128,11 @@ def compute_X_and_objective_multi(X, z_hat, D_hat=None, reg=None, loss='l2',
         # update z in the opposite way
         z_hat = scale_z_by_atom(z_hat, scale=norm, copy=True)
 
-    X_hat = construct_X_multi(z_hat, D=D_hat, n_channels=n_channels)
+    if loss_params.get("block", False):
+        X_hat = construct_X_multi(np.cumsum(z_hat, axis=-1), D=D_hat,
+                                  n_channels=n_channels)
+    else:
+        X_hat = construct_X_multi(z_hat, D=D_hat, n_channels=n_channels)
 
     cost = compute_objective(X=X, X_hat=X_hat, z_hat=z_hat, reg=reg, loss=loss,
                              loss_params=loss_params)
@@ -224,9 +235,15 @@ def gradient_uv(uv, X=None, z=None, constants=None, reg=None, loss='l2',
     if return_func:
         if reg is not None:
             if isinstance(reg, float):
-                cost += reg * safe_sum(z)
+                if loss_params.get("block", False):
+                    cost += reg * safe_sum(np.abs(z))
+                else:
+                    cost += reg * safe_sum(z)
             else:
-                cost += np.sum(reg * safe_sum(z, axis=(1, 2)))
+                if loss_params.get("block", False):
+                    cost += np.sum(reg * safe_sum(np.abs(z), axis=(1, 2)))
+                else:
+                    cost += np.sum(reg * safe_sum(z, axis=(1, 2)))
         return cost, grad
 
     return grad
@@ -239,7 +256,8 @@ def gradient_zi(Xi, zi, D=None, constants=None, reg=None, loss='l2',
         zi = zi.reshape((n_atoms, -1))
 
     if loss == 'l2':
-        cost, grad = _l2_gradient_zi(Xi, zi, D=D, return_func=return_func)
+        cost, grad = _l2_gradient_zi(Xi, zi, D=D, return_func=return_func,
+                                     loss_params=loss_params)
     elif loss == 'dtw':
         _assert_dtw()
         cost, grad = _dtw_gradient_zi(Xi, zi, D=D, loss_params=loss_params)
@@ -254,9 +272,15 @@ def gradient_zi(Xi, zi, D=None, constants=None, reg=None, loss='l2',
         grad += reg
         if return_func:
             if isinstance(reg, float):
-                cost += reg * zi.sum()
+                if loss_params.get("block", False):
+                    cost += reg * np.abs(zi).sum()
+                else:
+                    cost += reg * zi.sum()
             else:
-                cost += np.sum(reg * zi.sum(axis=1))
+                if loss_params.get("block", False):
+                    cost += np.sum(reg * np.abs(zi).sum(axis=1))
+                else:
+                    cost += np.sum(reg * zi.sum(axis=1))
 
     if flatten:
         grad = grad.ravel()
@@ -316,7 +340,8 @@ def gradient_d(D=None, X=None, z=None, constants=None, reg=None,
         raise NotImplementedError()
 
     if loss == 'l2':
-        cost, grad_d = _l2_gradient_d(D=D, X=X, z=z, constants=constants)
+        cost, grad_d = _l2_gradient_d(D=D, X=X, z=z, constants=constants,
+                                      loss_params=loss_params)
     elif loss == 'dtw':
         _assert_dtw()
         cost, grad_d = _dtw_gradient_d(D=D, X=X, z=z, loss_params=loss_params)
@@ -332,9 +357,15 @@ def gradient_d(D=None, X=None, z=None, constants=None, reg=None,
     if return_func:
         if reg is not None:
             if isinstance(reg, float):
-                cost += reg * safe_sum(z)
+                if loss_params.get("block", False):
+                    cost += reg * safe_sum(np.abs(z))
+                else:
+                    cost += reg * safe_sum(z)
             else:
-                cost += np.dot(reg, safe_sum(z, axis=(1, 2)))
+                if loss_params.get("block", False):
+                    cost += np.dot(reg, safe_sum(np.abs(z), axis=(1, 2)))
+                else:
+                    cost += np.dot(reg, safe_sum(z, axis=(1, 2)))
         return cost, grad_d
 
     return grad_d
@@ -359,7 +390,7 @@ def _dtw_gradient(X, z, D=None, loss_params=dict()):
     gamma = loss_params.get('gamma')
     sakoe_chiba_band = loss_params.get('sakoe_chiba_band', -1)
 
-    n_trials, n_channels, n_times = X.shape
+    n_trials, n_channels, _ = X.shape
     X_hat = construct_X_multi(z, D=D, n_channels=n_channels)
     grad = np.zeros(X_hat.shape)
     cost = 0
@@ -389,7 +420,7 @@ def _dtw_gradient_zi(Xi, z_i, D=None, loss_params={}):
         grad_Xi_hat[0], D=D, n_channels=n_channels)
 
 
-def _l2_gradient_d(D, X=None, z=None, constants=None):
+def _l2_gradient_d(D, X=None, z=None, constants=None, loss_params={}):
 
     if constants:
         assert D is not None
@@ -400,6 +431,8 @@ def _l2_gradient_d(D, X=None, z=None, constants=None):
         return None, g - constants['ztX']
     else:
         n_channels = X.shape[1]
+        if loss_params.get("block", False):
+            z = np.cumsum(z, axis=-1)
         residual = construct_X_multi(z, D=D, n_channels=n_channels) - X
         return None, _dense_transpose_convolve_z(residual, z)
 
@@ -430,7 +463,8 @@ def _l2_objective(X=None, X_hat=None, D=None, constants=None):
     return 0.5 * np.dot(residual.ravel(), residual.ravel())
 
 
-def _l2_gradient_zi(Xi, z_i, D=None, return_func=False):
+def _l2_gradient_zi(Xi, z_i, D=None, return_func=False,
+                    loss_params=dict()):
     """
 
     Parameters
@@ -443,6 +477,9 @@ def _l2_gradient_zi(Xi, z_i, D=None, return_func=False):
         The current dictionary, it can have shapes:
         - (n_atoms, n_channels + n_times_atom) for rank 1 dictionary
         - (n_atoms, n_channels, n_times_atom) for full rank dictionary
+    loss_params : dict
+        Additional option for the loss
+        - block : boolean whether or not activation are considered as blocks
     return_func : boolean
         Returns also the objective function, used to speed up LBFGS solver
 
@@ -453,6 +490,11 @@ def _l2_gradient_zi(Xi, z_i, D=None, return_func=False):
     grad : array, shape (n_atoms, n_times_valid)
         The gradient
     """
+    # add a discrete integration operator to get a TV regularization in the #
+    # synthetic formulation
+    if loss_params.get('block', False):
+        z_i = np.cumsum(z_i, axis=-1)
+
     n_channels, _ = Xi.shape
 
     Dz_i = _choose_convolve_multi(z_i, D=D, n_channels=n_channels)
@@ -467,6 +509,9 @@ def _l2_gradient_zi(Xi, z_i, D=None, return_func=False):
         func = None
 
     grad = _dense_transpose_convolve_d(Dz_i, D=D, n_channels=n_channels)
+
+    if loss_params.get('block', False):
+        grad = np.fliplr(np.cumsum(np.fliplr(grad), axis=-1))
 
     return func, grad
 
@@ -493,7 +538,7 @@ def _whitening_gradient(X, X_hat, loss_params, return_func=False):
 
 
 def _whitening_gradient_zi(Xi, z_i, D, loss_params, return_func=False):
-    n_channels, n_times = Xi.shape
+    n_channels, _ = Xi.shape
 
     # Construct Xi_hat and compute the gradient relatively to X_hat
     Xi_hat = construct_X_multi(z_i[None], D=D, n_channels=n_channels)
@@ -512,8 +557,8 @@ def _whitening_gradient_d(D, X, z, loss_params):
 
     # Construct Xi_hat and compute the gradient relatively to X_hat
     X_hat = construct_X_multi(z, D=D, n_channels=n_channels)
-    hTh_res, func = _whitening_gradient(X, X_hat, loss_params,
-                                        return_func=False)
+    hTh_res, _ = _whitening_gradient(X, X_hat, loss_params,
+                                     return_func=False)
 
     # Use the chain rule to compute the gradient compared to D
     grad = _dense_transpose_convolve_z(hTh_res, z)

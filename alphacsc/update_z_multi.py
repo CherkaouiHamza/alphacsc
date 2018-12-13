@@ -3,6 +3,8 @@
 #          Umut Simsekli <umut.simsekli@telecom-paristech.fr>
 #          Alexandre Gramfort <alexandre.gramfort@inria.fr>
 #          Thomas Moreau <thomas.moreau@inria.fr>
+#          Hamza Cherkaoui <hamza.cherkaoui@inria.fr>
+
 import time
 
 import numpy as np
@@ -20,8 +22,9 @@ from .utils.compute_constants import compute_DtD, compute_ztz, compute_ztX
 
 def update_z_multi(X, D, reg, z0=None, solver='l-bfgs', solver_kwargs=dict(),
                    loss='l2', loss_params=dict(), freeze_support=False,
-                   return_ztz=False, timing=False, n_jobs=1, debug=False):
-    """Update z using L-BFGS with positivity constraints
+                   positivity=True, return_ztz=False, timing=False, n_jobs=1,
+                   debug=False):
+    """Update z using L-BFGS/(F)ISTA/CD.
 
     Parameters
     ----------
@@ -46,6 +49,8 @@ def update_z_multi(X, D, reg, z0=None, solver='l-bfgs', solver_kwargs=dict(),
         Parameters of the loss
     freeze_support : boolean
         If True, the support of z0 is frozen.
+    positivity : boolean
+        If True set positivity constraints on z.
     return_ztz : boolean
         If True, returns the constants ztz and ztX, used to compute D-updates.
     timing : boolean
@@ -77,7 +82,8 @@ def update_z_multi(X, D, reg, z0=None, solver='l-bfgs', solver_kwargs=dict(),
 
     results = Parallel(n_jobs=n_jobs)(
         delayed_update_z(X[i], D, reg, z0[i], debug, solver, solver_kwargs,
-                         freeze_support, loss, loss_params=loss_params,
+                         freeze_support, positivity, loss,
+                         loss_params=loss_params,
                          return_ztz=return_ztz, timing=timing)
         for i in np.arange(n_trials))
 
@@ -120,8 +126,9 @@ class BoundGenerator(object):
 
 
 def _update_z_multi_idx(X_i, D, reg, z0_i, debug, solver='l-bfgs',
-                        solver_kwargs=dict(), freeze_support=False, loss='l2',
-                        loss_params=dict(), return_ztz=False, timing=False):
+                        solver_kwargs=dict(), freeze_support=False,
+                        positivity=True, loss='l2', loss_params=dict(),
+                        return_ztz=False, timing=False):
     t_start = time.time()
     n_channels, n_times = X_i.shape
     if D.ndim == 2:
@@ -142,6 +149,8 @@ def _update_z_multi_idx(X_i, D, reg, z0_i, debug, solver='l-bfgs',
     init_timing = time.time() - t_start
 
     def func_and_grad(zi):
+        # loss_params parameter control whether or not to use the synthetic TV
+        # formulation
         return gradient_zi(Xi=X_i, zi=zi, D=D, constants=constants,
                            reg=reg, return_func=True, flatten=True,
                            loss=loss, loss_params=loss_params)
@@ -164,6 +173,10 @@ def _update_z_multi_idx(X_i, D, reg, z0_i, debug, solver='l-bfgs',
             bounds = [(0, 0) if z == 0 else (0, None) for z in f0]
         else:
             bounds = BoundGenerator(n_atoms * n_times_valid)
+
+        if not positivity:
+            raise ValueError("solver_z='l-bfgs' can only be used if "
+                             "'positivity=True'")
         if timing:
             def callback(xk):
                 times.append(time.time() - t_start[0])
@@ -174,29 +187,34 @@ def _update_z_multi_idx(X_i, D, reg, z0_i, debug, solver='l-bfgs',
             callback = None
         factr = solver_kwargs.get('factr', 1e15)  # default value
         maxiter = solver_kwargs.get('maxiter', 15000)  # default value
-        z_hat, f, d = optimize.fmin_l_bfgs_b(
+        z_hat, _, _ = optimize.fmin_l_bfgs_b(
             func_and_grad, f0, fprime=None, args=(), approx_grad=False,
             bounds=bounds, factr=factr, maxiter=maxiter, callback=callback)
 
     elif solver in ("ista", "fista"):
         # Default args
         fista_kwargs = dict(
-            max_iter=100, eps=None, verbose=0, restart=None,
-            scipy_line_search=False,
-            momentum=(solver == "fista")
+            max_iter=100, eps=None, verbose=0,
+            momentum=(solver == "fista"), scipy_line_search=False,
         )
         fista_kwargs.update(solver_kwargs)
 
-        def objective(z_hat):
+        def _obj_z(z_hat):
             return func_and_grad(z_hat)[0]
 
-        def grad(z_hat):
+        def _grad_z(z_hat):
             return func_and_grad(z_hat)[1]
 
-        def prox(z_hat,):
-            return np.maximum(z_hat, 0.)
+        if positivity:
+            def _prox_z(z_hat, step_size=1.0):
+                lbda = reg * step_size
+                return np.maximum(z_hat - lbda, 0.0)
+        else:
+            def _prox_z(z_hat, step_size=1.0):
+                lbda = reg * step_size
+                return np.sign(z_hat) * np.maximum(np.abs(z_hat) - lbda, 0.0)
 
-        output = fista(objective, grad, prox, None, f0,
+        output = fista(_obj_z, _grad_z, _prox_z, None, f0,
                        adaptive_step_size=True, timing=timing,
                        name="Update z", **fista_kwargs)
         if timing:
@@ -206,6 +224,9 @@ def _update_z_multi_idx(X_i, D, reg, z0_i, debug, solver='l-bfgs',
             z_hat, pobj = output
 
     elif solver == "lgcd":
+        if not positivity:
+                raise NotImplementedError("solver_z='lgcd' can only be used"
+                                          " if 'positivity=True' (for now)")
         if not sparse.isspmatrix_lil(f0):
             f0 = f0.reshape(n_atoms, n_times_valid)
 
@@ -231,13 +252,20 @@ def _update_z_multi_idx(X_i, D, reg, z0_i, debug, solver='l-bfgs',
         z_hat = z_hat.reshape(n_atoms, n_times_valid)
 
     if loss == 'l2' and return_ztz:
+
+        z_i = z_hat
+
         if not is_lil(z_hat):
-            ztz = compute_ztz(z_hat[None], n_times_atom)
-            ztX = compute_ztX(z_hat[None], X_i[None])
+            if loss_params.get('block', False):
+                z_i = np.cumsum(z_hat, axis=1)
+            ztz = compute_ztz(z_i[None], n_times_atom)
+            ztX = compute_ztX(z_i[None], X_i[None])
         else:
+            if loss_params.get('block', False):
+                raise NotImplementedError("TV not implemented with lil.")
             cython_code._assert_cython()
-            ztz = cython_code._fast_compute_ztz([z_hat], n_times_atom)
-            ztX = cython_code._fast_compute_ztX([z_hat], X_i[None])
+            ztz = cython_code._fast_compute_ztz([z_i], n_times_atom)
+            ztX = cython_code._fast_compute_ztX([z_i], X_i[None])
     else:
         ztz, ztX = None, None
 

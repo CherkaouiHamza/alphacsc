@@ -3,7 +3,6 @@ import numpy as np
 from functools import partial
 from scipy.optimize import approx_fprime
 
-
 from alphacsc.utils import get_D
 from alphacsc.utils import construct_X_multi
 from alphacsc.utils.whitening import whitening
@@ -13,6 +12,7 @@ from alphacsc.loss_and_gradient import compute_X_and_objective_multi
 
 
 def _gradient_zi(X, z, D, loss, loss_params, flatten=False):
+    # pre-computed 'constant' variables are NOT used
     return gradient_zi(X[0], z[0], D, loss=loss, flatten=flatten,
                        loss_params=loss_params)
 
@@ -22,12 +22,13 @@ def _construct_X(X, z, D, loss, loss_params):
 
 
 def _objective(X, z, D, loss, loss_params):
+    # pre-computed 'constant' variables are NOT used
     return compute_X_and_objective_multi(X, z, D, feasible_evaluation=False,
-                                         loss=loss,
-                                         loss_params=loss_params)
+                                         loss=loss, loss_params=loss_params)
 
 
 def _gradient_d(X, z, D, loss, loss_params, flatten=False):
+    # pre-computed 'constant' variables are NOT used
     return gradient_d(D, X, z, loss=loss, flatten=flatten,
                       loss_params=loss_params)
 
@@ -56,8 +57,11 @@ def gradient_checker(func, grad, shape, args=(), kwargs={}, n_checks=10,
         except AssertionError:
             if debug:
                 import matplotlib.pyplot as plt
-                plt.plot(grad_approx)
-                plt.plot(grad_compute)
+                plt.plot(grad_approx, label="grad. approx.")
+                plt.plot(grad_compute, label="grad. computed")
+                plt.title("{}".format(grad_name))
+                plt.legend()
+                plt.grid()
                 plt.show()
             raise
 
@@ -69,7 +73,7 @@ def gradient_checker(func, grad, shape, args=(), kwargs={}, n_checks=10,
         test_grad(z0)
 
 
-@pytest.mark.parametrize('loss', ['l2', 'dtw', 'whitening'])
+@pytest.mark.parametrize('loss', ['l2', 'l2-tv', 'dtw', 'whitening'])
 @pytest.mark.parametrize('func', [
     _construct_X, _gradient_zi, _objective, _gradient_d])
 def test_consistency(loss, func):
@@ -91,21 +95,26 @@ def test_consistency(loss, func):
     if loss == "whitening":
         loss_params['ar_model'], X = whitening(X)
 
+    loss_params['integ_op'] = True if (loss == "l2-tv") else False
+    if loss_params['integ_op']:  # set params for special case 'l2-tv'
+        loss = "l2"
+
     val_D = func(X, z, D, loss, loss_params=loss_params)
     val_uv = func(X, z, uv, loss, loss_params=loss_params)
+
     assert np.allclose(val_D, val_uv)
 
 
-@pytest.mark.parametrize('loss', ['l2', 'dtw', 'whitening'])
+@pytest.mark.parametrize('loss', ['l2', 'l2-tv', 'dtw', 'whitening'])
 def test_gradients(loss):
     """Check that the gradients have the correct shape.
     """
     n_trials, n_channels, n_times = 5, 3, 100
     n_atoms, n_times_atom = 10, 15
 
-    n_checks = 5
-    if loss == "dtw":
-        n_checks = 1
+    loss_name = loss  # for error message
+
+    n_checks = 1 if loss == "dtw" else 5
 
     loss_params = dict(gamma=.01)
 
@@ -116,10 +125,17 @@ def test_gradients(loss):
 
     uv = np.random.randn(n_atoms, n_channels + n_times_atom)
     D = get_D(uv, n_channels)
+
     if loss == "whitening":
         loss_params['ar_model'], X = whitening(X)
 
+    loss_params['integ_op'] = True if (loss == "l2-tv") else False
+    if loss_params['integ_op']:  # set params for special case 'l2-tv'
+        loss = "l2"
+        loss_name = "l2-tv"
+
     # Test gradient D
+    # pre-computed 'constant' variables are NOT used
     assert D.shape == _gradient_d(X, z, D, loss, loss_params=loss_params).shape
 
     def pobj(ds):
@@ -130,11 +146,13 @@ def test_gradients(loss):
         return _gradient_d(X, z, ds, loss=loss, flatten=True,
                            loss_params=loss_params)
 
+    _grad_name = "gradient D for loss '{}'".format(loss_name)
+
     gradient_checker(pobj, grad, np.prod(D.shape), n_checks=n_checks,
-                     grad_name="gradient D for loss '{}'".format(loss),
-                     rtol=1e-4)
+                     debug=True, grad_name=_grad_name, rtol=1e-4)
 
     # Test gradient z
+    # pre-computed 'constant' variables are NOT used
     assert z[0].shape == _gradient_zi(
         X, z, D, loss, loss_params=loss_params).shape
 
@@ -143,9 +161,10 @@ def test_gradients(loss):
                           loss_params=loss_params)
 
     def grad(zs):
-        return gradient_zi(X[0], zs, D, loss=loss, flatten=True,
-                           loss_params=loss_params)
+        return gradient_zi(X[0], zs, D, loss=loss,
+                           flatten=True, loss_params=loss_params)
+
+    _grad_name = "gradient z for loss '{}'".format(loss_name)
 
     gradient_checker(pobj, grad, n_atoms * n_times_valid, n_checks=n_checks,
-                     debug=True, grad_name="gradient z for loss '{}'"
-                     .format(loss), rtol=1e-4)
+                     debug=True, grad_name=_grad_name, rtol=1e-4)
