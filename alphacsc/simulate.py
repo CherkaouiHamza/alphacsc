@@ -2,18 +2,21 @@
 #          Tom Dupre La Tour <tom.duprelatour@telecom-paristech.fr>
 #          Umut Simsekli <umut.simsekli@telecom-paristech.fr>
 #          Alexandre Gramfort <alexandre.gramfort@telecom-paristech.fr>
+#          Hamza Cherkaoui <hamza.cherkaoui@inria.fr>
 
 import numpy as np
 
-try:
-    from nipype.algorithms.modelgen import spm_hrf
-except ImportError:
-    raise ImportError("Please install nipype to run fMRI example.")
-
 from .utils import check_random_state, construct_X
+from .utils.dictionary import get_uv
+from .loss_and_gradient import construct_X_multi
 
 
 def hrf(n_times_atom):
+        try:
+            from nipype.algorithms.modelgen import spm_hrf
+        except ImportError:
+            raise ImportError("Please install nipype to use hrf function.")
+
         _hrf = spm_hrf(60./n_times_atom)
         if len(_hrf) != n_times_atom:
             # force _hrf to be n_times_atom long
@@ -124,3 +127,60 @@ def get_atoms(shape, n_times_atom, zero_mean=True, n_cycles=1):
         d -= np.mean(d)
 
     return d
+
+
+def gen_fmri_synth_data(L=60, random_seed=None):
+    """ Generate BOLD data and its corresponding spatial map.
+    """
+    T = 110
+    P = 36
+    p = int(np.sqrt(P))
+    K = 2
+    N = 1
+
+    cst = [T, P, K, N, L]
+
+    rng = np.random.RandomState(random_seed)
+
+    # define z (blocks)
+    blocks_0 = np.array(([0.0] * 10 + [1.0] * 10) * 5 + [0.0] * 10)
+    blocks_1 = np.array([0.0] * 20 + [1.0] * 10 + [0.0] * 30 +
+                        [1.0] * 10 + [0.0] * 40)
+    Lz = np.vstack([blocks_0, blocks_1])[None]
+    assert Lz.shape == (N, K, T)
+
+    # add noise on z
+    sigma = 1.0e-1
+    noise = sigma * rng.randn(*Lz.shape)
+    noisy_Lz = Lz + noise
+
+    # define v (HRF)
+    v = hrf(L).reshape(L, 1)
+    v /= np.linalg.norm(v)
+
+    # define u (spatial map)
+    u_0 = np.vstack([np.hstack([np.ones((int(p/2), int(p/2)), np.float),
+                                np.zeros((int(p/2), int(p/2)), np.float)]),
+                    np.zeros((int(p/2), p), np.float)]).reshape(P, 1)
+    u_1 = np.vstack([np.zeros((int(p/2), p), np.float),
+                    np.ones((int(p/2), p), np.float)]).reshape(P, 1)
+
+    u_i = [u_0, u_1]
+
+    # normalized each u_i
+    u_0 /= np.linalg.norm(u_0)
+    u_1 /= np.linalg.norm(u_1)
+
+    uv_0 = u_0.dot(v.T)
+    uv_1 = u_1.dot(v.T)
+
+    # define D (spatio-temporal map)
+    D = np.stack([uv_0, uv_1])
+    uv = get_uv(D)
+    assert uv.shape == (K, P+L)
+    assert D.shape == (K, P, L)
+
+    # define X
+    noisy_X = construct_X_multi(noisy_Lz, D, n_channels=P)
+
+    return noisy_X, uv, D, u_i, v, noisy_Lz, Lz, cst

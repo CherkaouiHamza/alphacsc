@@ -1,69 +1,33 @@
+"""
+=====================================================================
+Simple fMRI example
+=====================================================================
+Example to recover the different spontanious tasks involved in the BOLD signal.
+"""
+
+# Authors: Hamza Cherkaoui <hamza.cherkaoui@inria.fr>
+#
+# License: BSD (3-clause)
+
 import numpy as np
 import matplotlib.pyplot as plt
 
-from alphacsc.simulate import hrf
 from alphacsc import learn_d_z_multi
-from alphacsc.utils.dictionary import get_uv
-from alphacsc.loss_and_gradient import construct_X_multi
+from alphacsc.simulate import gen_fmri_synth_data
 from alphacsc.init_dict import init_dictionary
 
 
 ###############################################################################
 # define data
-T = 110  # BOLD time frames
-p = 6
-P = p*p  # number of voxels
-L = 60   # HRF time frames
-K = 2    # number of temporal atoms
-N = 1    # n subject
-
-assert T == 110
-assert K == 2
-assert N == 1
-
 random_seed = None
-rng = np.random.RandomState(random_seed)
-
-# define z (blocks)
-blocks_0 = np.array(([0.0] * 10 + [1.0] * 10) * 5 + [0.0] * 10)
-blocks_1 = np.array(([0.0] * 10 + [1.0] * 10 + [0.0] * 30) * 2 + [0.0] * 10)
-Lz = np.vstack([blocks_0, blocks_1])[None]
-assert Lz.shape == (N, K, T)
-
-# add noise on z
-sigma = 1.0e-1
-noise = sigma * rng.randn(*Lz.shape)
-Lz += noise
-
-# define v (HRF)
-v = hrf(L).reshape(L, 1)
-v /= np.linalg.norm(v)
-
-# define u (spatial map)
-u_0 = np.vstack([np.ones((int(p/2), p), np.float),
-                 np.zeros((int(p/2), p), np.float)]).reshape(P, 1)
-u_1 = np.vstack([np.zeros((int(p/2), p), np.float),
-                 np.ones((int(p/2), p), np.float)]).reshape(P, 1)
-
-# normalized each u_i
-u_0 /= np.linalg.norm(u_0)
-u_1 /= np.linalg.norm(u_1)
-
-uv_0 = u_0.dot(v.T)
-uv_1 = u_1.dot(v.T)
-
-# define D (spatio-temporal map)
-D = np.stack([uv_0, uv_1])
-uv = get_uv(D)
-assert uv.shape == (K, P+L)
-assert D.shape == (K, P, L)
-
-# define X
-X = construct_X_multi(Lz, D, n_channels=P)
+tmp = gen_fmri_synth_data(random_seed=random_seed)
+noisy_X, uv, D, u_i, v, noisy_Lz, Lz, cst = tmp
+u_0, u_1 = u_i
+T, P, K, N, L = cst
 
 ###############################################################################
 # estimation of d an z
-reg = 1.0
+reg = 0.5
 n_iter = 50
 nb_runs = 5
 results = []
@@ -71,16 +35,17 @@ results = []
 for ii in range(1, nb_runs+1):
     print("Run: {}/{}".format(ii, nb_runs))
 
-    uv_init = init_dictionary(X, K, L, uv_constraint='separate',
-                              rank1=True, window=False, D_init='ssa',
+    uv_init = init_dictionary(noisy_X, K, L, uv_constraint='separate',
+                              rank1=True, window=False, D_init='random',
                               D_init_params=dict(), random_state=random_seed)
-    uv_init[:, P:] = np.repeat(v[None, :], K, axis=0).reshape(K, L)
+    uv_init[:, P:] = np.repeat(v[None, :], K, axis=0)[:, :, 0]
 
     pobj, _, d_hat, z_hat, _ = learn_d_z_multi(
-        X, K, L, reg=reg, lmbd_max='scaled', n_iter=n_iter,
+        noisy_X, K, L, reg=reg, lmbd_max='scaled', n_iter=n_iter,
         D_init=uv_init, solver_z='fista', solver_d='only_u_adaptive',
-        positivity=False, random_state=rng, loss_params=dict(block=True),
-        raise_on_increase=True, n_jobs=1, verbose=1)
+        positivity=False, random_state=random_seed,
+        loss_params=dict(block=True, proba_map=True),
+        raise_on_increase=False, n_jobs=1, verbose=1)
 
     results.append([pobj, d_hat, z_hat])
 
@@ -100,11 +65,11 @@ u_1_hat = u_hat[1, :]
 # Lz
 plt.figure("Temporal atoms", figsize=(5, 10))
 plt.subplot(211)
-plt.plot(Lz[0, :, :].T, lw=2.0)
+plt.plot(Lz[0, :, :].T / Lz[0, :, :].T.max(axis=0), lw=2.0)  # l_inf normalized
 plt.title("True blocks coding signals (Lz)")
 plt.grid()
 plt.subplot(212)
-plt.plot(Lz_hat[0, :, :].T, lw=2.0)
+plt.plot(Lz_hat[0, :, :].T / Lz_hat[0, :, :].T.max(axis=0), lw=2.0)
 plt.title("Estimated blocks coding signals (Lz)")
 plt.grid()
 
@@ -124,27 +89,13 @@ plt.matshow(u_1_hat.reshape(int(np.sqrt(P)), int(np.sqrt(P))), fignum=False)
 plt.title("Estimated spatial map 2 (u_2)")
 plt.tight_layout()
 
-# v
-plt.figure("HRF", figsize=(5, 4))
-plt.subplot(121)
-plt.plot(v, lw=2.0)
-plt.xlabel("time frames")
-plt.title("True HRF")
-plt.grid()
-plt.subplot(122)
-plt.plot(v_hat, lw=2.0)
-plt.xlabel("time frames")
-plt.title("Est. HRF")
-plt.grid()
-plt.tight_layout()
-
 # pobj
-plt.figure("Cost function (%)", figsize=(4, 4))
+plt.figure("Cost function (%)", figsize=(5, 5))
 values = np.array(pobj)
 values /= (100.0 * values[0])
-plt.semilogx(values, lw=2.0)
+plt.loglog(values, lw=2.0)
 plt.title("Evolution of global cost-function")
-plt.xlabel('iter')
+plt.xlabel('log iter')
 plt.grid()
 
 plt.show()
