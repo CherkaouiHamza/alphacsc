@@ -5,6 +5,7 @@ from alphacsc.simulate import hrf
 from alphacsc import learn_d_z_multi
 from alphacsc.utils.dictionary import get_uv
 from alphacsc.loss_and_gradient import construct_X_multi
+from alphacsc.init_dict import init_dictionary
 
 
 ###############################################################################
@@ -62,25 +63,18 @@ X = construct_X_multi(Lz, D, n_channels=P)
 
 ###############################################################################
 # estimation of d an z
-reg = 2.0
-n_iter = 100
-n_run = 5
+reg = 1.0
+n_iter = 50
+nb_runs = 5
 results = []
 
-for i in range(1, n_run+1):
-    u_0_init = rng.randn(*u_0.shape)
-    u_1_init = rng.randn(*u_1.shape)
+for ii in range(1, nb_runs+1):
+    print("Run: {}/{}".format(ii, nb_runs))
 
-    u_0_init /= np.linalg.norm(u_0_init)
-    u_1_init /= np.linalg.norm(u_1_init)
-
-    uv_0_init = u_0_init.dot(v.T)
-    uv_1_init = u_1_init.dot(v.T)
-
-    D = np.stack([uv_0_init, uv_1_init])
-    uv_init = get_uv(D)
-
-    print("Run {}/{}".format(i, n_run))
+    uv_init = init_dictionary(X, K, L, uv_constraint='separate',
+                              rank1=True, window=False, D_init='ssa',
+                              D_init_params=dict(), random_state=random_seed)
+    uv_init[:, P:] = np.repeat(v[None, :], K, axis=0).reshape(K, L)
 
     pobj, _, d_hat, z_hat, _ = learn_d_z_multi(
         X, K, L, reg=reg, lmbd_max='scaled', n_iter=n_iter,
@@ -88,13 +82,13 @@ for i in range(1, n_run+1):
         positivity=False, random_state=rng, loss_params=dict(block=True),
         raise_on_increase=True, n_jobs=1, verbose=1)
 
-    results.append((pobj[-1], d_hat, z_hat))
+    results.append([pobj, d_hat, z_hat])
 
-# gather results
-l_last_pobj = np.array([res[0] for res in results])
+l_last_pobj = np.array([res[0][-1] for res in results])
 best_run = np.argmin(l_last_pobj)
 print("Best run: {}".format(best_run+1))
-_, d_hat, z_hat = results[best_run]
+pobj, d_hat, z_hat = results[best_run]
+
 Lz_hat = np.cumsum(z_hat, axis=-1)
 u_hat, v_hat = d_hat[:, :P], d_hat[0, P:]
 u_0_hat = u_hat[0, :]
@@ -148,7 +142,7 @@ plt.tight_layout()
 plt.figure("Cost function (%)", figsize=(4, 4))
 values = np.array(pobj)
 values /= (100.0 * values[0])
-plt.plot(values, lw=2.0)
+plt.semilogx(values, lw=2.0)
 plt.title("Evolution of global cost-function")
 plt.xlabel('iter')
 plt.grid()
