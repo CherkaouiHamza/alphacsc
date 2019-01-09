@@ -198,7 +198,6 @@ def update_uv(X, z, uv_hat0, constants=None, b_hat_0=None, debug=False,
         u_hat, pobj_u = fista(_obj_u, _grad_u, prox_u, 0.99 / Lu, u_hat,
                               max_iter, momentum=momentum, eps=eps,
                               adaptive_step_size=adaptive_step_size,
-                              scipy_line_search=False,
                               verbose=verbose, debug=debug,
                               name="Update u")
 

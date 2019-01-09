@@ -195,7 +195,7 @@ def _update_z_multi_idx(X_i, D, reg, z0_i, debug, solver='l-bfgs',
         # Default args
         fista_kwargs = dict(
             max_iter=100, eps=None, verbose=0,
-            momentum=(solver == "fista"), scipy_line_search=False,
+            momentum=(solver == "fista"),
         )
         fista_kwargs.update(solver_kwargs)
 
