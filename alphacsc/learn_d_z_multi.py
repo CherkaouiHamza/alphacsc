@@ -17,7 +17,7 @@ from .utils.convolution import sort_atoms_by_explained_variances
 from .utils.dictionary import get_lambda_max
 from .utils.whitening import whitening
 from .init_dict import init_dictionary, get_max_error_dict
-from .loss_and_gradient import compute_X_and_objective_multi
+from .loss_and_gradient import compute_X_and_objective_multi, _l2_gradient_zi
 from .update_z_multi import update_z_multi
 from .update_d_multi import update_uv, update_d
 
@@ -179,7 +179,19 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
     if loss == 'whitening':
         loss_params['ar_model'], X = whitening(X, ordar=loss_params['ordar'])
 
-    _lmbd_max = get_lambda_max(X, D_hat).max()
+    if loss_params.get('block', False):
+        # TODO: include this section in get_lambda_max
+        lbdas = []
+        for X_i in X:
+            _, _grad_z = _l2_gradient_zi(
+                    Xi=X_i, z_i=np.zeros((n_atoms, n_times_valid)),
+                    D=D_hat, return_func=False, loss_params=dict(block=True)
+                                    )
+            lbdas.append(_grad_z.max(axis=1))
+        _lmbd_max = np.max(lbdas)
+    else:
+        _lmbd_max = get_lambda_max(X, D_hat).max()
+
     if verbose > 1:
         print("[{}] Max value for lambda: {}".format(name, _lmbd_max))
     if lmbd_max == "scaled":
