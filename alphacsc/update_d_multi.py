@@ -124,6 +124,13 @@ def update_uv(X, z, uv_hat0, constants=None, b_hat_0=None, debug=False,
                                              feasible_evaluation=True,
                                              uv_constraint=uv_constraint)
 
+    if (loss_params.get("proba_map", False) and
+            solver_d not in ['only_u', 'only_u_adaptive']):
+        raise ValueError(
+             "For now, proba_map can only be used in"
+             "['alternate', 'alternate_adaptive', 'only_u', 'only_u_adaptive']"
+             )
+
     if solver_d in ['joint', 'fista']:
         # use FISTA on joint [u, v], with an adaptive step size
 
@@ -160,10 +167,32 @@ def update_uv(X, z, uv_hat0, constants=None, b_hat_0=None, debug=False,
         uv_hat = uv_hat0.copy()
         u_hat, v_hat = uv_hat[:, :n_channels], uv_hat[:, n_channels:]
 
-        def prox_u(u, step_size=1.0):  # step_size=1.0: code legacy
-            # u = np.maximum(0.0, u)  # XXX
-            u /= np.maximum(1.0, np.linalg.norm(u, axis=1))[:, None]
-            return u
+        if loss_params.get("proba_map", False):
+            def _prox_simplex(u, lbda):
+                """ proximal operator of indicator function:
+                    I{ u_i > 0 and sum_i u_i = 1}(u)
+
+                see https://math.stackexchange.com/questions/2402504/
+                    orthogonal-projection-onto-the-unit-simplex
+                or
+                see https://dl.acm.org/citation.cfm?id=9680
+                """
+                assert u.ndim == 1, "u should be vector"
+                # sort in descent order
+                s = np.sort(u)[::-1]
+                # c(j) = () sum(s(1:j)) - 1 ) / j
+                c = (np.cumsum(s) - lbda) / np.arange(1, len(u)+1)
+                # n = max{ j \in {1,...,B} : s(j) > c(j) }
+                m = np.arange(len(u))[s > c].max()
+                # compute prox
+                return u - np.minimum(u, c[m])
+
+            def prox_u(u, step_size=1.0):  # step_size=1.0: code legacy
+                return np.r_[[_prox_simplex(u_i, 1.0) for u_i in u]]
+        else:
+            def prox_u(u, step_size=1.0):  # step_size=1.0: code legacy
+                u /= np.maximum(1.0, np.linalg.norm(u, axis=1))[:, None]
+                return u
 
         def prox_v(v, step_size=1.0):  # step_size=1.0: code legacy
             if window:
