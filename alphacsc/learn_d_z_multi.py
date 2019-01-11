@@ -150,7 +150,6 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
     reg : float
         Regularization parameter used.
     """
-
     assert lmbd_max in ['fixed', 'scaled', 'per_atom', 'shared'], (
         "lmbd_max should be in {'fixed', 'scaled', 'per_atom', 'shared'}, "
         "not '{}'".format(lmbd_max)
@@ -491,6 +490,7 @@ def _online_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,
 
 def get_iteration_func(eps, stopping_pobj, callback, lmbd_max, name, verbose,
                        raise_on_increase):
+
     def end_iteration(X, z_hat, D_hat, pobj, iteration):
         if callable(callback):
             callback(X, D_hat, z_hat, pobj)
@@ -499,20 +499,25 @@ def get_iteration_func(eps, stopping_pobj, callback, lmbd_max, name, verbose,
         # parameter is fixed.
         dz = (pobj[-3] - pobj[-2]) / min(pobj[-3], pobj[-2])
         du = (pobj[-2] - pobj[-1]) / min(pobj[-2], pobj[-1])
+
         if ((dz < eps or du < eps) and lmbd_max in ['fixed', 'scaled']):
             if dz < 0 and raise_on_increase:
                 raise RuntimeError(
                     "The z update have increased the objective value by {}."
                     .format(-dz))
+
             if du < -1e-10 and dz > 1e-12 and raise_on_increase:
                 raise RuntimeError(
                     "The d update have increased the objective value by {}."
                     "(dz={})".format(du, -dz))
+
             if dz < eps and du < eps:
                 if verbose == 1:
                     print("")
-                print("[{}] Converged after {} iteration, (dz, du) "
-                      "= {:.3e}, {:.3e}".format(name, iteration + 1, dz, du))
+                if verbose:
+                    print("[{}] Converged after {} iteration, (dz, du) "
+                          "= {:.3e}, {:.3e}".format(name, iteration + 1,
+                                                    dz, du))
                 return True
 
         if stopping_pobj is not None and pobj[-1] < stopping_pobj:

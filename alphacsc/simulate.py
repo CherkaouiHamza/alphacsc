@@ -20,7 +20,8 @@ def hrf(n_times_atom):
         _hrf = spm_hrf(60./n_times_atom)
         if len(_hrf) != n_times_atom:
             # force _hrf to be n_times_atom long
-            _hrf = np.hstack([_hrf, np.zeros(np.abs(len(_hrf) - n_times_atom))])
+            n = np.abs(len(_hrf) - n_times_atom)
+            _hrf = np.hstack([_hrf, np.zeros(n)])
         return _hrf
 
 
@@ -89,13 +90,13 @@ def cycler(n_atoms, n_times_atom):
 def get_activations(rng, shape_z, constant_amplitude=False):
     starts = list()
     n_atoms, n_trials, n_times_valid = shape_z
-    for idx in range(n_atoms):
+    for _ in range(n_atoms):
         starts.append(rng.randint(low=0, high=n_times_valid,
                       size=(n_trials,)))
     # add activations
     z = np.zeros(shape_z)
     for i in range(n_trials):
-        for k_idx, start in enumerate(starts):
+        for k_idx, _ in enumerate(starts):
             if constant_amplitude:
                 randnum = 1.
             else:
@@ -107,14 +108,14 @@ def get_activations(rng, shape_z, constant_amplitude=False):
 def get_atoms(shape, n_times_atom, zero_mean=True, n_cycles=1):
     if shape == 'triangle':
         ds = list()
-        for idx in range(n_cycles):
+        for _ in range(n_cycles):
             ds.append(np.linspace(0, 1, n_times_atom // (2 * n_cycles)))
             ds.append(ds[-1][::-1])
         d = np.hstack(ds)
         d = np.pad(d, (0, n_times_atom - d.shape[0]), 'constant')
     elif shape == 'square':
         ds = list()
-        for idx in range(n_cycles):
+        for _ in range(n_cycles):
             ds.append(0.5 * np.ones((n_times_atom // (2 * n_cycles))))
             ds.append(-ds[-1])
         d = np.hstack(ds)
@@ -182,5 +183,6 @@ def gen_fmri_synth_data(L=60, random_seed=None):
 
     # define X
     noisy_X = construct_X_multi(noisy_Lz, D, n_channels=P)
+    X = construct_X_multi(Lz, D, n_channels=P)
 
-    return noisy_X, uv, D, u_i, v, noisy_Lz, Lz, cst
+    return noisy_X, X, uv, D, u_i, v, noisy_Lz, Lz, cst

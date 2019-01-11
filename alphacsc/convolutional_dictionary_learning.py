@@ -3,10 +3,13 @@
 #          Umut Simsekli <umut.simsekli@telecom-paristech.fr>
 #          Alexandre Gramfort <alexandre.gramfort@inria.fr>
 #          Thomas Moreau <thomas.moreau@inria.fr>
+#          Hamza Cherkaoui <hamza.cherkaoui@inria.fr>
 
+import numpy as np
 from sklearn.base import TransformerMixin
 from sklearn.exceptions import NotFittedError
 
+from .init_dict import init_dictionary
 from .update_z_multi import update_z_multi
 from .utils.dictionary import get_D, get_uv
 from .learn_d_z_multi import learn_d_z_multi
@@ -123,13 +126,15 @@ DEFAULT = dict(
 class ConvolutionalDictionaryLearning(TransformerMixin):
     __doc__ = DOC_FMT.format(**DEFAULT)
 
+    _default_dict = dict(gamma=.1, sakoe_chiba_band=10, ordar=10,
+                         block=False, proba_map=False)
+
     def __init__(self, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
-                 loss='l2', loss_params=dict(gamma=.1, sakoe_chiba_band=10,
-                                             ordar=10),
-                 rank1=True, window=False, uv_constraint='separate',
-                 solver_z='l_bfgs', solver_z_kwargs={},
-                 solver_d='alternate_adaptive', solver_d_kwargs={},
-                 reg=0.1, lmbd_max='fixed', eps=1e-10,
+                 loss='l2', loss_params=_default_dict,
+                 rank1=True, positivity=True, window=False,
+                 uv_constraint='separate', solver_z='l_bfgs',
+                 solver_z_kwargs={}, solver_d='alternate_adaptive',
+                 solver_d_kwargs={}, reg=0.1, lmbd_max='fixed', eps=1e-10,
                  D_init=None, D_init_params={},
                  algorithm='batch', algorithm_params={},
                  alpha=.8, batch_size=1, batch_selection='random',
@@ -144,6 +149,7 @@ class ConvolutionalDictionaryLearning(TransformerMixin):
         self.loss = loss
         self.loss_params = loss_params
         self.rank1 = rank1
+        self.positivity = positivity
         self.window = window
         self.uv_constraint = uv_constraint
         self.sort_atoms = sort_atoms
@@ -185,7 +191,7 @@ class ConvolutionalDictionaryLearning(TransformerMixin):
             X, self.n_atoms, self.n_times_atom,
             reg=self.reg, lmbd_max=self.lmbd_max,
             loss=self.loss, loss_params=self.loss_params,
-            rank1=self.rank1, window=self.window,
+            rank1=self.rank1, positivity=self.positivity, window=self.window,
             uv_constraint=self.uv_constraint,
             algorithm=self.algorithm, algorithm_params=self.algorithm_params,
             n_iter=self.n_iter, eps=self.eps,
@@ -369,3 +375,93 @@ class GreedyCDL(ConvolutionalDictionaryLearning):
             algorithm='greedy', lmbd_max=lmbd_max, raise_on_increase=True,
             loss='l2', use_sparse_z=False, n_jobs=n_jobs, verbose=verbose,
             callback=None, random_state=random_state, name="GreedyCDL")
+
+
+class BatchCDLfMRIFixedHRF(ConvolutionalDictionaryLearning):
+    _default = {}
+    _default.update(DEFAULT)
+    _default['desc'] = "Batch algorithm for convolutional dictionary learning"
+    _default['algorithm'] = "    Batch algorithm\n"
+    __doc__ = DOC_FMT.format(**_default)
+
+    _default_dict = dict(block=True, proba_map=True)
+
+    def __init__(self, n_atoms, n_times_atom, v, reg=0.1, n_iter=60, n_jobs=1,
+                 solver_z='fista', solver_z_kwargs={}, unbiased_z_hat=False,
+                 solver_d='only_u_adaptive', solver_d_kwargs={},
+                 rank1=True, window=False, uv_constraint='separate',
+                 positivity=False, proba_map=True, lmbd_max='scaled',
+                 eps=1e-10, D_init=None, D_init_params={}, verbose=1,
+                 random_state=None, sort_atoms=False):
+
+        self.v = v  # fixed HRF
+        _default_dict = dict(block=True,
+                             proba_map=proba_map)  # reg. on spatial map
+
+        super().__init__(
+            n_atoms, n_times_atom, reg=reg, n_iter=n_iter,
+            solver_z=solver_z, solver_z_kwargs=solver_z_kwargs,
+            rank1=rank1, positivity=positivity, window=window,
+            uv_constraint=uv_constraint, unbiased_z_hat=unbiased_z_hat,
+            sort_atoms=sort_atoms, solver_d=solver_d,
+            solver_d_kwargs=solver_d_kwargs, eps=eps, D_init=D_init,
+            D_init_params=D_init_params, loss_params=_default_dict,
+            algorithm='batch', lmbd_max=lmbd_max, raise_on_increase=False,
+            loss='l2', use_sparse_z=False, n_jobs=n_jobs, verbose=verbose,
+            callback=None, random_state=random_state, name="BatchCDL")
+
+    def fit(self, X, y=None, nb_fit_try=1):
+        """Learn a convolutional dictionary from the set of signals X.
+        """
+        results = []
+
+        # allow to try multiple init
+        for ii in range(1, nb_fit_try+1):
+            if self.verbose == 1:
+                print("Run: {}/{}".format(ii, nb_fit_try))
+
+            # custom init by fixing v
+            uv_init = init_dictionary(
+                        X, self.n_atoms, self.n_times_atom,
+                        uv_constraint=self.uv_constraint, rank1=self.rank1,
+                        window=self.window, D_init=self.D_init,
+                        D_init_params=self.D_init_params,
+                        random_state=self.random_state,
+                        )
+            _, n_channels, _ = X.shape
+            V = np.repeat(self.v[None, :], self.n_atoms, axis=0)[:, :, 0]
+            uv_init[:, n_channels:] = V
+
+            # fitting the model
+            res = learn_d_z_multi(
+                X, self.n_atoms, self.n_times_atom,
+                reg=self.reg, lmbd_max=self.lmbd_max,
+                loss=self.loss, loss_params=self.loss_params,
+                rank1=self.rank1, positivity=self.positivity,
+                window=self.window, uv_constraint=self.uv_constraint,
+                algorithm=self.algorithm,
+                algorithm_params=self.algorithm_params, n_iter=self.n_iter,
+                eps=self.eps, solver_z=self.solver_z,
+                solver_z_kwargs=self.solver_z_kwargs, solver_d=self.solver_d,
+                solver_d_kwargs=self.solver_d_kwargs, D_init=uv_init,
+                D_init_params=self.D_init_params,
+                use_sparse_z=self.use_sparse_z, unbiased_z_hat=False,
+                verbose=self.verbose, callback=self.callback,
+                random_state=self.random_state, n_jobs=self.n_jobs,
+                name=self.name, raise_on_increase=self.raise_on_increase,
+                sort_atoms=self.sort_atoms,
+                )
+
+            results.append(res)
+
+        # best run is the one with the smaller objective value
+        l_last_pobj = np.array([res[0][-1] for res in results])
+        best_run = np.argmin(l_last_pobj)
+        res = results[best_run]
+
+        if self.verbose == 1:
+            print("Best run: {}".format(best_run+1))
+
+        self._pobj, self._times, self._D_hat, self._z_hat, self.reg_ = res
+        self.n_channels_ = X.shape[1]
+        return self
