@@ -6,7 +6,7 @@ from scipy.optimize import approx_fprime
 from alphacsc.utils import get_D
 from alphacsc.utils import construct_X_multi
 from alphacsc.utils.whitening import whitening
-from alphacsc.loss_and_gradient import gradient_d
+from alphacsc.loss_and_gradient import gradient_d, gradient_uv
 from alphacsc.loss_and_gradient import gradient_zi
 from alphacsc.loss_and_gradient import compute_X_and_objective_multi
 
@@ -73,16 +73,11 @@ def gradient_checker(func, grad, shape, args=(), kwargs={}, n_checks=10,
         test_grad(z0)
 
 
-@pytest.mark.parametrize('loss', ['l2', 'l2-tv', 'dtw', 'whitening'])
-@pytest.mark.parametrize('func', [
-    _construct_X, _gradient_zi, _objective, _gradient_d])
-def test_consistency(loss, func):
-    """Check that the result are the same for the full rank D and rank 1 uv.
+def _set_up():
+    """ set-up the test
     """
     n_trials, n_channels, n_times = 5, 3, 100
     n_atoms, n_times_atom = 10, 15
-
-    loss_params = dict(gamma=.01)
 
     n_times_valid = n_times - n_times_atom + 1
 
@@ -92,11 +87,24 @@ def test_consistency(loss, func):
     uv = np.random.randn(n_atoms, n_channels + n_times_atom)
     D = get_D(uv, n_channels)
 
+    return X, uv, D, z, n_times_valid, n_atoms, n_channels
+
+
+@pytest.mark.parametrize('loss', ['l2', 'l2_tv', 'dtw', 'whitening'])
+@pytest.mark.parametrize('func', [
+    _construct_X, _gradient_zi, _objective, _gradient_d])
+def test_consistency(loss, func):
+    """Check that the result are the same for the full rank D and rank 1 uv.
+    """
+    X, uv, D, z, _, _, _ = _set_up()
+
+    loss_params = dict(gamma=.01)
+
     if loss == "whitening":
         loss_params['ar_model'], X = whitening(X)
 
-    loss_params['integ_op'] = True if (loss == "l2-tv") else False
-    if loss_params['integ_op']:  # set params for special case 'l2-tv'
+    loss_params['block'] = True if (loss == "l2_tv") else False
+    if loss_params['block']:  # set params for special case 'l2-tv'
         loss = "l2"
 
     val_D = func(X, z, D, loss, loss_params=loss_params)
@@ -105,50 +113,40 @@ def test_consistency(loss, func):
     assert np.allclose(val_D, val_uv)
 
 
-@pytest.mark.parametrize('loss', ['l2', 'l2-tv', 'dtw', 'whitening'])
+@pytest.mark.parametrize('loss', ['l2', 'l2_tv', 'dtw', 'whitening'])
 def test_gradients(loss):
     """Check that the gradients have the correct shape.
     """
-    n_trials, n_channels, n_times = 5, 3, 100
-    n_atoms, n_times_atom = 10, 15
-
-    loss_name = loss  # for error message
-
-    n_checks = 1 if loss == "dtw" else 5
+    X, _, D, z, n_times_valid, n_atoms, n_channels = _set_up()
 
     loss_params = dict(gamma=.01)
-
-    n_times_valid = n_times - n_times_atom + 1
-
-    X = np.random.randn(n_trials, n_channels, n_times)
-    z = np.random.randn(n_trials, n_atoms, n_times_valid)
-
-    uv = np.random.randn(n_atoms, n_channels + n_times_atom)
-    D = get_D(uv, n_channels)
 
     if loss == "whitening":
         loss_params['ar_model'], X = whitening(X)
 
-    loss_params['integ_op'] = True if (loss == "l2-tv") else False
-    if loss_params['integ_op']:  # set params for special case 'l2-tv'
+    loss_name = loss  # for error message
+    n_checks = 1 if loss == "dtw" else 5
+
+    loss_params['block'] = True if (loss == "l2_tv") else False
+    if loss_params['block']:  # set params for special case 'l2_tv'
         loss = "l2"
-        loss_name = "l2-tv"
+        loss_name = "l2_tv"
 
     # Test gradient D
     # pre-computed 'constant' variables are NOT used
     assert D.shape == _gradient_d(X, z, D, loss, loss_params=loss_params).shape
 
-    def pobj(ds):
+    def pobj_d(ds):
         return _objective(X, z, ds.reshape(n_atoms, n_channels, -1), loss,
                           loss_params=loss_params)
 
-    def grad(ds):
+    def grad_d(ds):
         return _gradient_d(X, z, ds, loss=loss, flatten=True,
                            loss_params=loss_params)
 
     _grad_name = "gradient D for loss '{}'".format(loss_name)
 
-    gradient_checker(pobj, grad, np.prod(D.shape), n_checks=n_checks,
+    gradient_checker(pobj_d, grad_d, np.prod(D.shape), n_checks=n_checks,
                      debug=True, grad_name=_grad_name, rtol=1e-4)
 
     # Test gradient z
@@ -156,15 +154,46 @@ def test_gradients(loss):
     assert z[0].shape == _gradient_zi(
         X, z, D, loss, loss_params=loss_params).shape
 
-    def pobj(zs):
+    def pobj_z(zs):
         return _objective(X[:1], zs.reshape(1, n_atoms, -1), D, loss,
                           loss_params=loss_params)
 
-    def grad(zs):
+    def grad_z(zs):
         return gradient_zi(X[0], zs, D, loss=loss,
                            flatten=True, loss_params=loss_params)
 
     _grad_name = "gradient z for loss '{}'".format(loss_name)
 
-    gradient_checker(pobj, grad, n_atoms * n_times_valid, n_checks=n_checks,
-                     debug=True, grad_name=_grad_name, rtol=1e-4)
+    gradient_checker(pobj_z, grad_z, n_atoms * n_times_valid,
+                     n_checks=n_checks, debug=True, grad_name=_grad_name,
+                     rtol=1e-4)
+
+
+@pytest.mark.parametrize('loss', ['l2', 'l2_tv', 'dtw', 'whitening'])
+def test_loss_consistency(loss):
+    """Check that the loss are consistent w.r.t the gradient computation and
+    the dedicated function (only for the z-gradient)
+    """
+    X, uv, D, z, _, _, _ = _set_up()
+    reg = 1.0
+
+    loss_params = dict(gamma=.01)
+
+    if loss == "whitening":
+        loss_params['ar_model'], X = whitening(X)
+
+    loss_params['block'] = True if (loss == "l2_tv") else False
+    if loss_params['block']:  # set params for special case 'l2_tv'
+        loss = "l2"
+
+    cost_ref = compute_X_and_objective_multi(
+                                X, z, D_hat=D, reg=reg, loss=loss,
+                                loss_params=loss_params,
+                                feasible_evaluation=True,
+                                uv_constraint='joint', return_X_hat=False
+                                )
+
+    cost_test, _ = gradient_zi(X[0], z[0], D=D, constants=None, reg=reg,
+                               loss=loss, loss_params=loss_params,
+                               return_func=True, flatten=False)
+    np.allclose(cost_ref, cost_test)
