@@ -32,14 +32,14 @@ package and its dependencies. The ``setup.py`` depends on ``numpy`` and
 ``cython`` for the installation so it is advised to install them beforehand. To
 install this package, please run one of the two commands:
 
-(Latest stable version)
+(Install Latest stable version)
 
 .. code::
 
     pip install numpy cython
     pip install alphacsc
 
-(Development version)
+(Install Development version)
 
 .. code::
 
@@ -48,6 +48,16 @@ install this package, please run one of the two commands:
 
 If you do not have admin privileges on the computer, use the ``--user`` flag
 with ``pip``. To upgrade, use the ``--upgrade`` flag provided by ``pip``.
+
+(Manually install Development version)
+
+Install this way if you aim to developp in alphacsc.
+
+.. code::
+
+	cd alphacsc
+	python3 setup.py build_ext --inplace
+    export PYTHONPATH="$HOME/src/these/code/alphacsc/:$PYTHONPATH"
 
 To check if everything worked fine, you can run:
 
