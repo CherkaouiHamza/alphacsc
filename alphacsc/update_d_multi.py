@@ -170,17 +170,15 @@ def update_uv(X, z, uv_hat0, constants=None, b_hat_0=None, debug=False,
         if loss_params.get("proba_map", False):
             def _prox_simplex(u, lbda):
                 """ proximal operator of indicator function:
-                    I{ u_i > 0 and sum_i u_i = 1}(u)
-
+                    I{ u_i > 0 and sum_i u_i = lbda}(u)
                 see https://math.stackexchange.com/questions/2402504/
-                    orthogonal-projection-onto-the-unit-simplex
-                or
+                    orthogonal-projection-onto-the-unit-simplex or
                 see https://dl.acm.org/citation.cfm?id=9680
                 """
                 assert u.ndim == 1, "u should be vector"
-                # sort in descent order
+                # sort in descent order: s = sort(u)
                 s = np.sort(u)[::-1]
-                # c(j) = () sum(s(1:j)) - 1 ) / j
+                # c(j) = ((sum(s(1:j)) - lbda ) / j
                 c = (np.cumsum(s) - lbda) / np.arange(1, len(u)+1)
                 # n = max{ j \in {1,...,B} : s(j) > c(j) }
                 m = np.arange(len(u))[s > c].max()
@@ -188,7 +186,8 @@ def update_uv(X, z, uv_hat0, constants=None, b_hat_0=None, debug=False,
                 return u - np.minimum(u, c[m])
 
             def prox_u(u, step_size=1.0):  # step_size=1.0: code legacy
-                return np.r_[[_prox_simplex(u_i, 1.0) for u_i in u]]
+                # XXX sum_i u_i = 10.0 hardcoded
+                return np.r_[[_prox_simplex(u_i, lbda=10.0) for u_i in u]]
         else:
             def prox_u(u, step_size=1.0):  # step_size=1.0: code legacy
                 u /= np.maximum(1.0, np.linalg.norm(u, axis=1))[:, None]
