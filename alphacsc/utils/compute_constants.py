@@ -4,10 +4,12 @@ import numpy as np
 
 def compute_DtD(D, n_channels=None):
     """Compute the DtD matrix
+    D : array (n_atoms, n_channels, n_times_atom) or
+              (n_atoms, n_channels + n_times_atom)
+    DtD  : array (n_atoms, n_atoms, 2 * n_times_atom - 1)
     """
     if D.ndim == 2:
         return _compute_DtD_uv(D, n_channels)
-
     return _compute_DtD_D(D)
 
 
@@ -42,17 +44,13 @@ def _compute_DtD_D(D):  # pragma: no cover
     n_atoms, n_channels, n_times_atom = D.shape
 
     DtD = np.zeros(shape=(n_atoms, n_atoms, 2 * n_times_atom - 1))
-    t0 = n_times_atom - 1
     for k0 in range(n_atoms):
         for k in range(n_atoms):
-            for t in range(n_times_atom):
-                if t == 0:
-                    DtD[k0, k, t0] = np.dot(D[k0].ravel(), D[k].ravel())
-                else:
-                    DtD[k0, k, t0 + t] = np.dot(D[k0, :, :-t].ravel(),
-                                                D[k, :, t:].ravel())
-                    DtD[k0, k, t0 - t] = np.dot(D[k0, :, t:].ravel(),
-                                                D[k, :, :-t].ravel())
+            _sum = np.convolve(D[k0, 0, ::-1], D[k, 0, :])
+            for p in range(1, n_channels):
+                _sum += np.convolve(D[k0, p, ::-1], D[k, p, :])  # retro conv
+            DtD[k0, k, :] = _sum
+
     return DtD
 
 

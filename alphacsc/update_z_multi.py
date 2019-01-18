@@ -14,7 +14,7 @@ from joblib import Parallel, delayed
 
 from . import cython_code
 from .utils.optim import fista
-from .loss_and_gradient import gradient_zi
+from .loss_and_gradient import gradient_zi, _dense_transpose_convolve_d
 from .utils.lil import is_list_of_lil, is_lil
 from .utils.coordinate_descent import _coordinate_descent_idx
 from .utils.compute_constants import compute_DtD, compute_ztz, compute_ztX
@@ -144,33 +144,33 @@ def _update_z_multi_idx(X_i, D, reg, z0_i, debug, solver='l-bfgs',
         raise NotImplementedError()
 
     constants = {}
-    if solver == "lgcd":
+    if solver in ("lgcd", "ista", "fista"):
         constants['DtD'] = compute_DtD(D=D, n_channels=n_channels)
+        constants['DtX_i'] = _dense_transpose_convolve_d(X_i, D=D,
+                                                         n_channels=n_channels)
     init_timing = time.time() - t_start
 
-    def func_and_grad(zi):
-        # loss_params parameter control whether or not to use the synthetic TV
-        # formulation
-        return gradient_zi(Xi=X_i, zi=zi, D=D, constants=constants,
-                           reg=reg, return_func=True, flatten=True,
-                           loss=loss, loss_params=loss_params)
-
     if z0_i is None:
-        f0 = np.zeros(n_atoms * n_times_valid)
+        z_hat_0 = np.zeros(n_atoms * n_times_valid)
     elif is_lil(z0_i):
-        f0 = z0_i
+        z_hat_0 = z0_i
     else:
-        f0 = z0_i.reshape(n_atoms * n_times_valid)
+        z_hat_0 = z0_i.reshape(n_atoms * n_times_valid)
 
     times, pobj = None, None
-    if timing:
-        times = [init_timing]
-        pobj = [func_and_grad(f0)[0]]
-        t_start = [time.time()]
 
     if solver == 'l-bfgs':
+        def func_and_grad(zi):
+            return gradient_zi(Xi=X_i, zi=zi, D=D, constants=constants,
+                               reg=reg, return_func=True, flatten=True,
+                               loss=loss, loss_params=loss_params)
+        if timing:
+            times = [init_timing]
+            pobj = [func_and_grad(z_hat_0)[0]]
+            t_start = [time.time()]
+
         if freeze_support:
-            bounds = [(0, 0) if z == 0 else (0, None) for z in f0]
+            bounds = [(0, 0) if z == 0 else (0, None) for z in z_hat_0]
         else:
             bounds = BoundGenerator(n_atoms * n_times_valid)
 
@@ -188,7 +188,7 @@ def _update_z_multi_idx(X_i, D, reg, z0_i, debug, solver='l-bfgs',
         factr = solver_kwargs.get('factr', 1e15)  # default value
         maxiter = solver_kwargs.get('maxiter', 15000)  # default value
         z_hat, _, _ = optimize.fmin_l_bfgs_b(
-            func_and_grad, f0, fprime=None, args=(), approx_grad=False,
+            func_and_grad, z_hat_0, fprime=None, args=(), approx_grad=False,
             bounds=bounds, factr=factr, maxiter=maxiter, callback=callback)
 
     elif solver in ("ista", "fista"):
@@ -200,10 +200,17 @@ def _update_z_multi_idx(X_i, D, reg, z0_i, debug, solver='l-bfgs',
         fista_kwargs.update(solver_kwargs)
 
         def _obj_z(z_hat):
-            return func_and_grad(z_hat)[0]
+            return gradient_zi(Xi=X_i, zi=z_hat, D=D, constants=constants,
+                               reg=reg, return_func=True, flatten=True,
+                               loss=loss, loss_params=loss_params)[0]
 
         def _grad_z(z_hat):
-            return func_and_grad(z_hat)[1]
+            return gradient_zi(Xi=X_i, zi=z_hat, D=D, constants=constants,
+                               reg=reg, return_func=False, flatten=True,
+                               loss=loss, loss_params=loss_params)
+
+        if timing:
+            times = [init_timing]
 
         if positivity:
             def _prox_z(z_hat, step_size=1.0):
@@ -214,8 +221,8 @@ def _update_z_multi_idx(X_i, D, reg, z0_i, debug, solver='l-bfgs',
                 lbda = reg * step_size
                 return np.sign(z_hat) * np.maximum(np.abs(z_hat) - lbda, 0.0)
 
-        output = fista(_obj_z, _grad_z, _prox_z, None, f0,
-                       adaptive_step_size=True, timing=timing,
+        output = fista(_obj_z, _grad_z, _prox_z, None, z_hat_0,
+                       adaptive_step_size=True, timing=timing, debug=debug,
                        name="Update z", **fista_kwargs)
         if timing:
             z_hat, pobj, times = output
@@ -227,8 +234,8 @@ def _update_z_multi_idx(X_i, D, reg, z0_i, debug, solver='l-bfgs',
         if not positivity:
                 raise NotImplementedError("solver_z='lgcd' can only be used"
                                           " if 'positivity=True' (for now)")
-        if not sparse.isspmatrix_lil(f0):
-            f0 = f0.reshape(n_atoms, n_times_valid)
+        if not sparse.isspmatrix_lil(z_hat_0):
+            z_hat_0 = z_hat_0.reshape(n_atoms, n_times_valid)
 
         # Default values
         tol = solver_kwargs.get('tol', 1e-1)
@@ -236,7 +243,7 @@ def _update_z_multi_idx(X_i, D, reg, z0_i, debug, solver='l-bfgs',
         max_iter = solver_kwargs.get('max_iter', 1e15)
         strategy = solver_kwargs.get('strategy', 'greedy')
         output = _coordinate_descent_idx(
-            X_i, D, constants, reg=reg, z0=f0,
+            X_i, D, constants, reg=reg, z0=z_hat_0,
             freeze_support=freeze_support, tol=tol, max_iter=max_iter,
             n_seg=n_seg, strategy=strategy, timing=timing, name="Update z")
         if timing:

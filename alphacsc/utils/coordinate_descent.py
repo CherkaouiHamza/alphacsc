@@ -4,7 +4,7 @@ from scipy import sparse
 
 from .lil import is_lil
 from .. import cython_code
-from ..loss_and_gradient import gradient_zi
+from ..loss_and_gradient import gradient_zi, _dense_transpose_convolve_d
 from .convolution import _choose_convolve_multi
 
 
@@ -166,6 +166,9 @@ def _coordinate_descent_idx(Xi, D, constants, reg, z0=None, max_iter=1000,
 def _init_beta(Xi, z_hat, D, constants, reg, norm_Dk, tol,
                use_sparse_dz=False):
     # Init beta with -DtX
+    n_channels, _ = Xi.shape
+    constants['DtX_i'] = _dense_transpose_convolve_d(Xi, D=D,
+                                                     n_channels=n_channels)
     beta = gradient_zi(Xi, z_hat, D=D, reg=None, loss='l2',
                        return_func=False, constants=constants)
     if is_lil(z_hat):

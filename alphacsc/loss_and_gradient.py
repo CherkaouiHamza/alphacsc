@@ -5,11 +5,12 @@
 #          Thomas Moreau <thomas.moreau@inria.fr>
 #          Hamza Cherkaoui <hamza.cherkaoui@inria.fr>
 
+import warnings
 import numpy as np
+from scipy.sparse.lil import lil_matrix
 
-from .utils.convolution import numpy_convolve_uv
-from .utils.convolution import tensordot_convolve
-from .utils.convolution import _choose_convolve_multi
+from .utils.convolution import (numpy_convolve_uv, tensordot_convolve,
+                                _choose_convolve_multi)
 from .utils.whitening import apply_whitening
 from .utils.lil import scale_z_by_atom, safe_sum, get_z_shape, is_list_of_lil
 from .utils import construct_X_multi
@@ -252,11 +253,17 @@ def gradient_uv(uv, X=None, z=None, constants=None, reg=None, loss='l2',
 def gradient_zi(Xi, zi, D=None, constants=None, reg=None, loss='l2',
                 loss_params=dict(), return_func=False, flatten=False):
     n_atoms = D.shape[0]
+
     if flatten:
         zi = zi.reshape((n_atoms, -1))
 
+    if constants and loss in ['dtw', 'whitening']:
+        warnings.warn("[in gradient_zi] pre-computed gradient not available "
+                      "with loss in ['dtw', 'whitening']")
+
     if loss == 'l2':
         cost, grad = _l2_gradient_zi(Xi, zi, D=D, return_func=return_func,
+                                     constants=constants,
                                      loss_params=loss_params)
     elif loss == 'dtw':
         _assert_dtw()
@@ -463,8 +470,24 @@ def _l2_objective(X=None, X_hat=None, D=None, constants=None):
     return 0.5 * np.dot(residual.ravel(), residual.ravel())
 
 
-def _l2_gradient_zi(Xi, z_i, D=None, return_func=False,
-                    loss_params=dict()):
+def _compute_DtD_z_i(z_i, DtD=None, D=None, n_channels=None, n_times=None):
+    """
+    z.shape = n_atoms, n_times_valid
+    DtD.shape = n_atoms, n_channels, 2 * n_times_atom - 1
+    DtD_z_i.shape = n_atoms, n_times_valid
+    """
+    n_atoms, n_times_valid = z_i.shape
+    DtD_z_i = np.empty((n_atoms, n_times_valid))
+    for k0 in range(n_atoms):
+        _sum = np.convolve(z_i[0, :], DtD[k0, 0, :], mode='same')
+        for k in range(1, n_atoms):
+            _sum += np.convolve(z_i[k, :], DtD[k0, k, :], mode='same')
+        DtD_z_i[k0, :] = _sum
+    return DtD_z_i
+
+
+def _l2_gradient_zi(Xi, z_i, D, loss_params=dict(), constants=None,
+                    return_func=False):
     """
 
     Parameters
@@ -480,6 +503,8 @@ def _l2_gradient_zi(Xi, z_i, D=None, return_func=False,
     loss_params : dict
         Additional option for the loss
         - block : boolean whether or not activation are considered as blocks
+    constants : dict or None
+        Constant to accelerate the computation of the gradient
     return_func : boolean
         Returns also the objective function, used to speed up LBFGS solver
 
@@ -490,25 +515,36 @@ def _l2_gradient_zi(Xi, z_i, D=None, return_func=False,
     grad : array, shape (n_atoms, n_times_valid)
         The gradient
     """
-    # add a discrete integration operator to get a TV regularization in the #
+    # add a discrete integration operator to get a TV regularization in the
     # synthetic formulation
     if loss_params.get('block', False):
         z_i = np.cumsum(z_i, axis=-1)
 
     n_channels, _ = Xi.shape
 
-    Dz_i = _choose_convolve_multi(z_i, D=D, n_channels=n_channels)
+    if constants and not isinstance(z_i, lil_matrix):
+        DtD_z_i = _compute_DtD_z_i(z_i, DtD=constants['DtD'])
+        DtX_i = constants['DtX_i']
+        grad = DtD_z_i - DtX_i
 
-    # n_channels, n_times = Dz_i.shape
-    if Xi is not None:
-        Dz_i -= Xi
+        if return_func:
+            func = 0.5 * np.sum(z_i * DtD_z_i) - np.sum(z_i * DtX_i) \
+                   + 0.5 * np.sum(Xi * Xi)
+        else:
+            func = None
 
-    if return_func:
-        func = 0.5 * np.dot(Dz_i.ravel(), Dz_i.ravel())
     else:
-        func = None
+        Dz_i = _choose_convolve_multi(z_i, D=D, n_channels=n_channels)
 
-    grad = _dense_transpose_convolve_d(Dz_i, D=D, n_channels=n_channels)
+        if Xi is not None:
+            Dz_i_Xi = Dz_i - Xi
+
+        if return_func:
+            func = 0.5 * np.dot(Dz_i_Xi.ravel(), Dz_i_Xi.ravel())
+        else:
+            func = None
+
+        grad = _dense_transpose_convolve_d(Dz_i_Xi, D=D, n_channels=n_channels)
 
     if loss_params.get('block', False):
         grad = np.fliplr(np.cumsum(np.fliplr(grad), axis=-1))
