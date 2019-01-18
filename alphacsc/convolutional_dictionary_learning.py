@@ -386,7 +386,7 @@ class BatchCDLfMRIFixedHRF(ConvolutionalDictionaryLearning):
 
     _default_dict = dict(block=True, proba_map=True)
 
-    def __init__(self, n_atoms, n_times_atom, v, reg=0.1, n_iter=60, n_jobs=1,
+    def __init__(self, n_atoms, v, reg=0.1, n_iter=60, n_jobs=1,
                  solver_z='fista', solver_z_kwargs={}, unbiased_z_hat=False,
                  solver_d='only_u_adaptive', solver_d_kwargs={},
                  rank1=True, window=False, uv_constraint='separate',
@@ -399,7 +399,7 @@ class BatchCDLfMRIFixedHRF(ConvolutionalDictionaryLearning):
                              proba_map=proba_map)  # reg. on spatial map
 
         super().__init__(
-            n_atoms, n_times_atom, reg=reg, n_iter=n_iter,
+            n_atoms=n_atoms, n_times_atom=len(v), reg=reg, n_iter=n_iter,
             solver_z=solver_z, solver_z_kwargs=solver_z_kwargs,
             rank1=rank1, positivity=positivity, window=window,
             uv_constraint=uv_constraint, unbiased_z_hat=unbiased_z_hat,
@@ -417,7 +417,7 @@ class BatchCDLfMRIFixedHRF(ConvolutionalDictionaryLearning):
 
         # allow to try multiple init
         for ii in range(1, nb_fit_try+1):
-            if self.verbose == 1:
+            if self.verbose:
                 print("Run: {}/{}".format(ii, nb_fit_try))
 
             # custom init by fixing v
@@ -429,7 +429,7 @@ class BatchCDLfMRIFixedHRF(ConvolutionalDictionaryLearning):
                         random_state=self.random_state,
                         )
             _, n_channels, _ = X.shape
-            V = np.repeat(self.v[None, :], self.n_atoms, axis=0)[:, :, 0]
+            V = np.repeat(self.v[None, :], self.n_atoms, axis=0).squeeze()
             uv_init[:, n_channels:] = V
 
             # fitting the model
