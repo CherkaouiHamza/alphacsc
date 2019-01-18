@@ -438,6 +438,8 @@ def _l2_gradient_d(D, X=None, z=None, constants=None, loss_params={}):
         return None, g - constants['ztX']
     else:
         n_channels = X.shape[1]
+        # add a discrete integration operator to get a TV regularization in the
+        # synthetic formulation
         if loss_params.get("block", False):
             z = np.cumsum(z, axis=-1)
         residual = construct_X_multi(z, D=D, n_channels=n_channels) - X

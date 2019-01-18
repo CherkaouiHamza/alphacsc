@@ -6,6 +6,7 @@
 #          Hamza Cherkaoui <hamza.cherkaoui@inria.fr>
 
 from __future__ import print_function
+import warnings
 import time
 import sys
 
@@ -179,7 +180,7 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
         loss_params['ar_model'], X = whitening(X, ordar=loss_params['ordar'])
 
     if loss_params.get('block', False):
-        # TODO: include this section in get_lambda_max
+        # TODO: include this section in function get_lambda_max
         lbdas = []
         for X_i in X:
             _, _grad_z = _l2_gradient_zi(
@@ -357,7 +358,9 @@ def _batch_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,
         if verbose > 5:
             print("[{}] sparsity: {:.3e}".format(
                 name, z_nnz.sum() / z_size))
-            print('[{}] Objective (z) : {:.3e}'.format(name, pobj[-1]))
+            print('[{}] Objective (z) : {:.3e} ({:.4}s)'.format(name,
+                                                                pobj[-1],
+                                                                times[-1]))
 
         if np.all(z_nnz == 0):
             import warnings
@@ -383,7 +386,9 @@ def _batch_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,
                 print('[{}] Resampled atom {}'.format(name, k0))
 
         if verbose > 5:
-            print('[{}] Objective (d) : {:.3e}'.format(name, pobj[-1]))
+            print('[{}] Objective (d) : {:.3e} ({:.4}s)'.format(name,
+                                                                pobj[-1],
+                                                                times[-1]))
 
         if end_iter_func(X, z_hat, D_hat, pobj, ii):
             break
@@ -461,7 +466,6 @@ def _online_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,
             print('[{}] Objective (z) : {:.3e}'.format(name, pobj[-1]))
 
         if np.all(z_nnz == 0):
-            import warnings
             warnings.warn("Regularization parameter `reg` is too large "
                           "and all the activations are zero. No atoms has"
                           " been learned.", UserWarning)

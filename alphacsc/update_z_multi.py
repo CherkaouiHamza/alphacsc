@@ -104,6 +104,8 @@ def update_z_multi(X, D, reg, z0=None, solver='l-bfgs', solver_kwargs=dict(),
     if not is_list_of_lil(z0):
         z_hats = np.array(z_hats).reshape(n_trials, n_atoms, n_times_valid)
 
+    if debug:
+        return z_hats, ztz, ztX, pobj, times
     return z_hats, ztz, ztX
 
 
