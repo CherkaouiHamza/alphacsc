@@ -3,12 +3,13 @@ import numpy as np
 from functools import partial
 from scipy.optimize import approx_fprime
 
-from alphacsc.utils import get_D
-from alphacsc.utils import construct_X_multi
+from alphacsc.utils import get_D, construct_X_multi
+from alphacsc.utils.compute_constants import compute_DtD
 from alphacsc.utils.whitening import whitening
-from alphacsc.loss_and_gradient import gradient_d, gradient_uv
-from alphacsc.loss_and_gradient import gradient_zi
-from alphacsc.loss_and_gradient import compute_X_and_objective_multi
+from alphacsc.loss_and_gradient import (gradient_d, gradient_zi,
+                                        compute_X_and_objective_multi,
+                                        _l2_gradient_zi,
+                                        _dense_transpose_convolve_d)
 
 
 def _gradient_zi(X, z, D, loss, loss_params, flatten=False):
@@ -73,18 +74,20 @@ def gradient_checker(func, grad, shape, args=(), kwargs={}, n_checks=10,
         test_grad(z0)
 
 
-def _set_up():
+def _set_up(seed=None):
     """ set-up the test
     """
+    rng = np.random.RandomState(seed)
+
     n_trials, n_channels, n_times = 5, 3, 100
     n_atoms, n_times_atom = 10, 15
 
     n_times_valid = n_times - n_times_atom + 1
 
-    X = np.random.randn(n_trials, n_channels, n_times)
-    z = np.random.randn(n_trials, n_atoms, n_times_valid)
+    X = rng.randn(n_trials, n_channels, n_times)
+    z = rng.randn(n_trials, n_atoms, n_times_valid)
 
-    uv = np.random.randn(n_atoms, n_channels + n_times_atom)
+    uv = rng.randn(n_atoms, n_channels + n_times_atom)
     D = get_D(uv, n_channels)
 
     return X, uv, D, z, n_times_valid, n_atoms, n_channels
@@ -115,7 +118,7 @@ def test_consistency(loss, func):
 
 @pytest.mark.parametrize('loss', ['l2', 'l2_tv', 'dtw', 'whitening'])
 def test_gradients(loss):
-    """Check that the gradients have the correct shape.
+    """Check that the gradients with approx_fprime Scipy function.
     """
     X, _, D, z, n_times_valid, n_atoms, n_channels = _set_up()
 
@@ -169,12 +172,52 @@ def test_gradients(loss):
                      rtol=1e-4)
 
 
+@pytest.mark.parametrize('ds', ['D', 'uv'])
+@pytest.mark.parametrize('loss_params', [None, dict(block=True)])
+def test__l2_gradient_zi_consistency(ds, loss_params):
+    """Check that the _l2_gradient_zi provide the same output with and without
+    constant (pre-computed) variables
+    """
+    X, uv, D, z, _, _, n_channels = _set_up(0)
+
+    if ds == 'D':
+        DtD = compute_DtD(D, n_channels=n_channels)
+        DtX_i = _dense_transpose_convolve_d(X[0], D=D, n_channels=n_channels)
+        constants = dict(DtD=DtD, DtX_i=DtX_i)
+
+    if ds == 'uv':
+        DtD = compute_DtD(uv, n_channels=n_channels)
+        DtX_i = _dense_transpose_convolve_d(X[0], D=uv, n_channels=n_channels)
+        constants = dict(DtD=DtD, DtX_i=DtX_i)
+
+    _, grad_with_cst = _l2_gradient_zi(X[0], z[0], D=D,
+                                       constants=constants,
+                                       loss_params=dict(block=True),
+                                       return_func=False)
+
+    _, grad_without_cst = _l2_gradient_zi(X[0], z[0], D=D,
+                                          constants=None,
+                                          loss_params=dict(block=True),
+                                          return_func=False)
+
+    np.testing.assert_allclose(grad_with_cst, grad_without_cst)
+
+
 @pytest.mark.parametrize('loss', ['l2', 'l2_tv', 'dtw', 'whitening'])
 def test_loss_consistency(loss):
-    """Check that the loss are consistent w.r.t the gradient computation and
-    the dedicated function (only for the z-gradient)
+    """Check that the loss are consistent w.r.t the gradient_zi computation and
+    the dedicated function
     """
-    X, uv, D, z, _, _, _ = _set_up()
+    rng = np.random.RandomState(None)
+
+    n_trials, n_channels, n_times = 1, 3, 100
+    n_atoms, n_times_atom = 10, 15
+    n_times_valid = n_times - n_times_atom + 1
+
+    X = rng.randn(n_trials, n_channels, n_times)
+    z = rng.randn(n_trials, n_atoms, n_times_valid)
+
+    D = rng.randn(n_atoms, n_channels, n_times_atom)
     reg = 1.0
 
     loss_params = dict(gamma=.01)
@@ -189,11 +232,11 @@ def test_loss_consistency(loss):
     cost_ref = compute_X_and_objective_multi(
                                 X, z, D_hat=D, reg=reg, loss=loss,
                                 loss_params=loss_params,
-                                feasible_evaluation=True,
-                                uv_constraint='joint', return_X_hat=False
+                                feasible_evaluation=False,
+                                uv_constraint='separate', return_X_hat=False
                                 )
-
     cost_test, _ = gradient_zi(X[0], z[0], D=D, constants=None, reg=reg,
                                loss=loss, loss_params=loss_params,
                                return_func=True, flatten=False)
-    np.allclose(cost_ref, cost_test)
+
+    np.testing.assert_allclose(cost_ref, cost_test)

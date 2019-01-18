@@ -5,10 +5,36 @@ import numpy as np
 from alphacsc.utils import check_random_state, get_D
 from alphacsc.utils.whitening import whitening, apply_whitening
 from alphacsc.utils.compute_constants import compute_DtD, compute_ztz
-from alphacsc.utils.convolution import tensordot_convolve, construct_X_multi
+from alphacsc.utils.convolution import (tensordot_convolve, construct_X_multi,
+                                        _choose_convolve_multi)
+from alphacsc.loss_and_gradient import (_compute_DtD_z_i,
+                                        _dense_transpose_convolve_d)
 
 
-def test_DtD():
+def test_DtD_z_i_computation():
+    """ Test the computation of _compute_DtD_z_i
+    """
+    rng = np.random.RandomState(None)
+
+    n_trials, n_channels, n_times = 1, 3, 100
+    n_atoms, n_times_atom = 10, 15
+    n_times_valid = n_times - n_times_atom + 1
+
+    z = rng.randn(n_trials, n_atoms, n_times_valid)
+
+    D = rng.randn(n_atoms, n_channels, n_times_atom)
+    DtD = compute_DtD(D)
+
+    D_z_i = _choose_convolve_multi(z[0], D=D, n_channels=n_channels)
+    DtD_z_i_ = _dense_transpose_convolve_d(D_z_i, D=D, n_channels=n_channels)
+    DtD_z_i = _compute_DtD_z_i(z[0], DtD=DtD)
+
+    np.testing.assert_allclose(DtD_z_i_, DtD_z_i)
+
+
+def test_DtD_consistency():
+    """ Test the consistency of the DtD computation from uv and D
+    """
     n_atoms = 10
     n_channels = 5
     n_times_atom = 50

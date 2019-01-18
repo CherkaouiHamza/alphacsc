@@ -107,6 +107,7 @@ def test_cd(use_sparse_lil):
                                density=density, random_state=0)
                  for _ in range(n_trials)]
         z0 = z[0]
+
     else:
         z = abs(rng.randn(n_trials, n_atoms, n_times_valid))
         z_gen = abs(rng.randn(n_trials, n_atoms, n_times_valid))
@@ -145,9 +146,9 @@ def test_cd(use_sparse_lil):
                                            feasible_evaluation=False)
     assert loss_1 <= loss_0, "Bad initialization in greedy CD."
 
-    z_hat, pobj, times = _coordinate_descent_idx(X[0], uv, constants, reg,
-                                                 debug=True, timing=True,
-                                                 z0=z0, max_iter=10000)
+    z_hat, pobj, _ = _coordinate_descent_idx(X[0], uv, constants, reg,
+                                             debug=True, timing=True,
+                                             z0=z0, max_iter=10000)
 
     try:
         assert all([p1 >= p2 for p1, p2 in zip(pobj[:-1], pobj[1:])]), "oups"
