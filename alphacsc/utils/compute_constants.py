@@ -94,3 +94,25 @@ def compute_ztX(z, X):
         ztX[k, :, :] += z[n, k, t] * X[n, :, t:t + n_times_atom]
 
     return ztX
+
+
+def compute_ztz_v(ztz, uv, n_channels):
+    """
+    ztz.shape = n_atoms, n_atoms, 2 * n_times_atom - 1
+    v.shape = n_atoms, n_times_atom
+    ztz_v.shape = n_atoms, n_atoms, n_times_atom
+    """
+    assert uv.ndim == 2
+    n_times_atom = (ztz.shape[2] + 1) // 2
+    n_atoms = ztz.shape[0]
+
+    v = uv[:, n_channels:][:, ::-1]
+
+    ztz_v = np.zeros((n_atoms, n_atoms, n_times_atom))
+    for k0 in range(n_atoms):
+        for t in range(n_times_atom):
+            for k in range(n_atoms):
+                tmp = np.sum(ztz[k0, k, t:t + n_times_atom] * v[k])
+                ztz_v[k0, k, t] += tmp
+
+    return ztz_v

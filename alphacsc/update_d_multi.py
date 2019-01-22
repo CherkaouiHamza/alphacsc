@@ -11,7 +11,7 @@ from . import cython_code
 from .utils.lil import get_z_shape, is_list_of_lil
 from .utils.optim import fista, power_iteration
 from .utils.convolution import numpy_convolve_uv
-from .utils.compute_constants import compute_ztz, compute_ztX
+from .utils.compute_constants import compute_ztz, compute_ztX, compute_ztz_v
 from .utils.dictionary import tukey_window
 
 from .loss_and_gradient import compute_objective, compute_X_and_objective_multi
@@ -207,6 +207,10 @@ def update_uv(X, z, uv_hat0, constants=None, b_hat_0=None, debug=False,
         def _obj_u(u):
             uv = np.c_[u, v_hat]
             return objective(uv)
+
+        if loss_params.get('block', False):
+            constants['ztz_v'] = compute_ztz_v(constants['ztz'],
+                                               uv_hat, n_channels)
 
         def _grad_u(u):
             if window:

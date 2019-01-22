@@ -433,10 +433,16 @@ def _l2_gradient_d(D, X=None, z=None, constants=None, loss_params={}):
     if constants:
         assert D is not None
         if D.ndim == 2:
-            g = numpy_convolve_uv(constants['ztz'], D)
+            if loss_params.get('block', False):
+                ztz_D = numpy_convolve_v(constants['ztz_v'], D)
+                ztz_D_ = numpy_convolve_uv(constants['ztz'], D)
+                np.testing.assert_allclose(ztz_D, ztz_D_)
+            else:
+                ztz_D = numpy_convolve_uv(constants['ztz'], D)
         else:
-            g = tensordot_convolve(constants['ztz'], D)
-        return None, g - constants['ztX']
+            ztz_D = tensordot_convolve(constants['ztz'], D)
+        return None,  ztz_D - constants['ztX']
+
     else:
         n_channels = X.shape[1]
         # add a discrete integration operator to get a TV regularization in the

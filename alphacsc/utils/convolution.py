@@ -220,11 +220,43 @@ def numpy_convolve_uv(ztz, uv):
 
     G = np.zeros((n_atoms, n_channels, n_times_atom))
     for k0 in range(n_atoms):
-        for k1 in range(n_atoms):
-            for t in range(n_times_atom):
+        for t in range(n_times_atom):
+            for k in range(n_atoms):
                 G[k0, :, t] += (
-                    np.sum(ztz[k0, k1, t:t + n_times_atom] * v[k1]) * u[k1, :])
+                    np.sum(ztz[k0, k, t:t + n_times_atom] * v[k]) * u[k, :])
 
+    return G
+
+
+@numba.jit((numba.float64[:, :, :], numba.float64[:, :]), cache=True,
+            nopython=True)
+def numpy_convolve_v(ztz_v, uv):
+    """Compute the multivariate (valid) convolution of ztz and D
+
+    Parameters
+    ----------
+    ztz: array, shape = (n_atoms, n_atoms, 2 * n_times_atom - 1)
+        Activations
+    uv: array, shape = (n_atoms, n_channels + n_times_atom)
+        Dictionnary
+
+    Returns
+    -------
+    G : array, shape = (n_atoms, n_channels, n_times_atom)
+        Gradient
+    """
+    assert uv.ndim == 2
+    assert ztz_v.ndim == 3
+
+    _, n_atoms, n_times_atom = ztz_v.shape
+    n_channels = uv.shape[1] - n_times_atom
+    u = uv[:, :n_channels]
+
+    G = np.zeros((n_atoms, n_channels, n_times_atom))
+    for k0 in range(n_atoms):
+        for t in range(n_times_atom):
+            for k in range(n_atoms):
+                G[k0, :, t] += ztz_v[k0, k, t] * u[k, :]
     return G
 
 

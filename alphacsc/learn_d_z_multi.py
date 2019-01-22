@@ -18,7 +18,7 @@ from .utils.convolution import sort_atoms_by_explained_variances
 from .utils.dictionary import get_lambda_max
 from .utils.whitening import whitening
 from .init_dict import init_dictionary, get_max_error_dict
-from .loss_and_gradient import compute_X_and_objective_multi, _l2_gradient_zi
+from .loss_and_gradient import compute_X_and_objective_multi
 from .update_z_multi import update_z_multi
 from .update_d_multi import update_uv, update_d
 
