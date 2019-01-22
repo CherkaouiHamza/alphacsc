@@ -253,6 +253,60 @@ def tensordot_convolve(ztz, D):
     return G
 
 
+def _dense_tr_conv_z(residual, z):
+    """Convolve residual[i] with the transpose for each atom k, and return the sum
+
+    Parameters
+    ----------
+    residual : array, shape (n_trials, n_channels, n_times)
+    z : array, shape (n_trials, n_atoms, n_times_valid)
+
+    Return
+    ------
+    grad_D : array, shape (n_atoms, n_channels, n_times_atom)
+
+    """
+    if is_list_of_lil(z):
+        raise NotImplementedError()
+
+    return np.sum([[[np.convolve(res_ip, z_ik[::-1],
+                                 mode='valid')                   # n_times_atom
+                     for res_ip in res_i]                        # n_channnels
+                    for z_ik in z_i]                             # n_atoms
+                   for z_i, res_i in zip(z, residual)], axis=0)  # n_atoms
+
+
+def _dense_tr_conv_d(residual_i, D=None, n_channels=None):
+    """Convolve residual[i] with the transpose for each atom k
+
+    Parameters
+    ----------
+    residual_i : array, shape (n_channels, n_times)
+    D : array, shape (n_atoms, n_channels, n_times_atom) or
+               shape (n_atoms, n_channels + n_times_atom)
+
+    Return
+    ------
+    grad_zi : array, shape (n_atoms, n_times_valid)
+
+    """
+
+    if D.ndim == 2:
+        # multiply by the spatial filter u
+        uR_i = np.dot(D[:, :n_channels], residual_i)
+
+        # Now do the dot product with the transpose of D (D.T) which is
+        # the conv by the reversed filter (keeping valid mode)
+        return np.array([
+            np.convolve(uR_ik, v_k[::-1], 'valid')
+            for (uR_ik, v_k) in zip(uR_i, D[:, n_channels:])
+        ])
+    else:
+        return np.sum([[np.correlate(res_ip, d_kp, mode='valid')
+                        for res_ip, d_kp in zip(residual_i, d_k)]
+                       for d_k in D], axis=1)
+
+
 def sort_atoms_by_explained_variances(D_hat, z_hat, n_channels):
     n_atoms = D_hat.shape[0]
     assert z_hat.shape[1] == n_atoms

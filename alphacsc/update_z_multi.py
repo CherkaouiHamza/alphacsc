@@ -14,7 +14,7 @@ from joblib import Parallel, delayed
 
 from . import cython_code
 from .utils.optim import fista
-from .loss_and_gradient import gradient_zi, _dense_transpose_convolve_d
+from .loss_and_gradient import gradient_zi, _dense_tr_conv_d
 from .utils.lil import is_list_of_lil, is_lil
 from .utils.coordinate_descent import _coordinate_descent_idx
 from .utils.compute_constants import compute_DtD, compute_ztz, compute_ztX
@@ -148,8 +148,7 @@ def _update_z_multi_idx(X_i, D, reg, z0_i, debug, solver='l-bfgs',
     constants = {}
     if solver in ("lgcd", "ista", "fista"):
         constants['DtD'] = compute_DtD(D=D, n_channels=n_channels)
-        constants['DtX_i'] = _dense_transpose_convolve_d(X_i, D=D,
-                                                         n_channels=n_channels)
+        constants['DtX_i'] = _dense_tr_conv_d(X_i, D=D, n_channels=n_channels)
     init_timing = time.time() - t_start
 
     if z0_i is None:

@@ -9,8 +9,9 @@ import warnings
 import numpy as np
 from scipy.sparse.lil import lil_matrix
 
-from .utils.convolution import (numpy_convolve_uv, tensordot_convolve,
-                                _choose_convolve_multi)
+from .utils.convolution import (numpy_convolve_uv, numpy_convolve_v,
+                                tensordot_convolve, _choose_convolve_multi,
+                                _dense_tr_conv_z, _dense_tr_conv_d)
 from .utils.whitening import apply_whitening
 from .utils.lil import scale_z_by_atom, safe_sum, get_z_shape, is_list_of_lil
 from .utils import construct_X_multi
@@ -415,7 +416,7 @@ def _dtw_gradient(X, z, D=None, loss_params=dict()):
 def _dtw_gradient_d(D, X=None, z=None, loss_params={}):
     cost, grad_X_hat = _dtw_gradient(X, z, D=D, loss_params=loss_params)
 
-    return cost, _dense_transpose_convolve_z(grad_X_hat, z)
+    return cost, _dense_tr_conv_z(grad_X_hat, z)
 
 
 def _dtw_gradient_zi(Xi, z_i, D=None, loss_params={}):
@@ -423,7 +424,7 @@ def _dtw_gradient_zi(Xi, z_i, D=None, loss_params={}):
     cost_i, grad_Xi_hat = _dtw_gradient(Xi[None], z_i[None], D=D,
                                         loss_params=loss_params)
 
-    return cost_i, _dense_transpose_convolve_d(
+    return cost_i, _dense_tr_conv_d(
         grad_Xi_hat[0], D=D, n_channels=n_channels)
 
 
@@ -443,7 +444,7 @@ def _l2_gradient_d(D, X=None, z=None, constants=None, loss_params={}):
         if loss_params.get("block", False):
             z = np.cumsum(z, axis=-1)
         residual = construct_X_multi(z, D=D, n_channels=n_channels) - X
-        return None, _dense_transpose_convolve_z(residual, z)
+        return None, _dense_tr_conv_z(residual, z)
 
 
 def _l2_objective(X=None, X_hat=None, D=None, constants=None):
@@ -546,7 +547,7 @@ def _l2_gradient_zi(Xi, z_i, D, loss_params=dict(), constants=None,
         else:
             func = None
 
-        grad = _dense_transpose_convolve_d(Dz_i_Xi, D=D, n_channels=n_channels)
+        grad = _dense_tr_conv_d(Dz_i_Xi, D=D, n_channels=n_channels)
 
     if loss_params.get('block', False):
         grad = np.fliplr(np.cumsum(np.fliplr(grad), axis=-1))
@@ -584,7 +585,7 @@ def _whitening_gradient_zi(Xi, z_i, D, loss_params, return_func=False):
                                         return_func=return_func)
 
     # Use the chain rule to compute the gradient compared to z_i
-    grad = _dense_transpose_convolve_d(hTh_res[0], D=D, n_channels=n_channels)
+    grad = _dense_tr_conv_d(hTh_res[0], D=D, n_channels=n_channels)
     assert grad.shape == z_i.shape
 
     return func, grad
@@ -599,60 +600,6 @@ def _whitening_gradient_d(D, X, z, loss_params):
                                      return_func=False)
 
     # Use the chain rule to compute the gradient compared to D
-    grad = _dense_transpose_convolve_z(hTh_res, z)
+    grad = _dense_tr_conv_z(hTh_res, z)
 
     return None, grad
-
-
-def _dense_transpose_convolve_z(residual, z):
-    """Convolve residual[i] with the transpose for each atom k, and return the sum
-
-    Parameters
-    ----------
-    residual : array, shape (n_trials, n_channels, n_times)
-    z : array, shape (n_trials, n_atoms, n_times_valid)
-
-    Return
-    ------
-    grad_D : array, shape (n_atoms, n_channels, n_times_atom)
-
-    """
-    if is_list_of_lil(z):
-        raise NotImplementedError()
-
-    return np.sum([[[np.convolve(res_ip, z_ik[::-1],
-                                 mode='valid')                   # n_times_atom
-                     for res_ip in res_i]                        # n_channnels
-                    for z_ik in z_i]                             # n_atoms
-                   for z_i, res_i in zip(z, residual)], axis=0)  # n_atoms
-
-
-def _dense_transpose_convolve_d(residual_i, D=None, n_channels=None):
-    """Convolve residual[i] with the transpose for each atom k
-
-    Parameters
-    ----------
-    residual_i : array, shape (n_channels, n_times)
-    D : array, shape (n_atoms, n_channels, n_times_atom) or
-               shape (n_atoms, n_channels + n_times_atom)
-
-    Return
-    ------
-    grad_zi : array, shape (n_atoms, n_times_valid)
-
-    """
-
-    if D.ndim == 2:
-        # multiply by the spatial filter u
-        uR_i = np.dot(D[:, :n_channels], residual_i)
-
-        # Now do the dot product with the transpose of D (D.T) which is
-        # the conv by the reversed filter (keeping valid mode)
-        return np.array([
-            np.convolve(uR_ik, v_k[::-1], 'valid')
-            for (uR_ik, v_k) in zip(uR_i, D[:, n_channels:])
-        ])
-    else:
-        return np.sum([[np.correlate(res_ip, d_kp, mode='valid')
-                        for res_ip, d_kp in zip(residual_i, d_k)]
-                       for d_k in D], axis=1)

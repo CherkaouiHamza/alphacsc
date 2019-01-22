@@ -9,7 +9,7 @@ from alphacsc.utils.whitening import whitening
 from alphacsc.loss_and_gradient import (gradient_d, gradient_zi,
                                         compute_X_and_objective_multi,
                                         _l2_gradient_zi,
-                                        _dense_transpose_convolve_d)
+                                        _dense_tr_conv_d)
 
 
 def _gradient_zi(X, z, D, loss, loss_params, flatten=False):
@@ -182,12 +182,12 @@ def test__l2_gradient_zi_consistency(ds, loss_params):
 
     if ds == 'D':
         DtD = compute_DtD(D, n_channels=n_channels)
-        DtX_i = _dense_transpose_convolve_d(X[0], D=D, n_channels=n_channels)
+        DtX_i = _dense_tr_conv_d(X[0], D=D, n_channels=n_channels)
         constants = dict(DtD=DtD, DtX_i=DtX_i)
 
     if ds == 'uv':
         DtD = compute_DtD(uv, n_channels=n_channels)
-        DtX_i = _dense_transpose_convolve_d(X[0], D=uv, n_channels=n_channels)
+        DtX_i = _dense_tr_conv_d(X[0], D=uv, n_channels=n_channels)
         constants = dict(DtD=DtD, DtX_i=DtX_i)
 
     _, grad_with_cst = _l2_gradient_zi(X[0], z[0], D=D,

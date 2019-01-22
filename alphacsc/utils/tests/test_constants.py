@@ -26,7 +26,7 @@ def test_DtD_z_i_computation():
     DtD = compute_DtD(D)
 
     D_z_i = _choose_convolve_multi(z[0], D=D, n_channels=n_channels)
-    DtD_z_i_ = _dense_transpose_convolve_d(D_z_i, D=D, n_channels=n_channels)
+    DtD_z_i_ = _dense_tr_conv_d(D_z_i, D=D, n_channels=n_channels)
     DtD_z_i = _compute_DtD_z_i(z[0], DtD=DtD)
 
     np.testing.assert_allclose(DtD_z_i_, DtD_z_i)

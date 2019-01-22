@@ -1,5 +1,6 @@
 import numpy as np
 from scipy import signal
+from .convolution import _dense_tr_conv_d
 
 
 def get_D(uv_hat, n_channels):
