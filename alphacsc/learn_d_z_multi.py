@@ -52,10 +52,11 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
         The support of the atom.
     reg : float
         The regularization parameter
-    lmbd_max : 'fixed' | 'scaled' | 'per_atom' | 'shared'
+    lmbd_max : 'fixed' | 'scaled' | 'scaled-block' | 'per_atom' | 'shared'
         If not fixed, adapt the regularization rate as a ratio of lambda_max:
           - 'scaled': the regularization parameter is fixed as a ratio of its
             maximal value at init i.e. reg_used = reg * lmbd_max(uv_init)
+          - 'scaled-block': as 'scaled' but addapted to block activation model
           - 'shared': the regularization parameter is set at each iteration as
             a ratio of its maximal value for the current dictionary estimate
             i.e. reg_used = reg * lmbd_max(uv_hat)
@@ -151,9 +152,10 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
     reg : float
         Regularization parameter used.
     """
-    assert lmbd_max in ['fixed', 'scaled', 'per_atom', 'shared'], (
-        "lmbd_max should be in {'fixed', 'scaled', 'per_atom', 'shared'}, "
-        "not '{}'".format(lmbd_max)
+    _valid_lmbd = ['fixed', 'scaled', 'scaled-block', 'per_atom', 'shared']
+    assert lmbd_max in _valid_lmbd, (
+        "lmbd_max should be in {'fixed', 'scaled', 'scaled-block', "
+        "'per_atom', 'shared'}, not '{}'".format(lmbd_max)
     )
 
     n_trials, n_channels, n_times = X.shape
@@ -179,19 +181,7 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
     if loss == 'whitening':
         loss_params['ar_model'], X = whitening(X, ordar=loss_params['ordar'])
 
-    if loss_params.get('block', False):
-        # TODO: include this section in function get_lambda_max
-        lbdas = []
-        for X_i in X:
-            _, _grad_z = _l2_gradient_zi(
-                    Xi=X_i, z_i=np.zeros((n_atoms, n_times_valid)),
-                    D=D_hat, return_func=False, loss_params=dict(block=True)
-                                    )
-            lbdas.append(_grad_z.max(axis=1))
-        _lmbd_max = np.max(lbdas)
-    else:
-        _lmbd_max = get_lambda_max(X, D_hat).max()
-
+    _lmbd_max = get_lambda_max(X, D_hat, block=('block' in lmbd_max)).max()
     if verbose > 1:
         print("[{}] Max value for lambda: {}".format(name, _lmbd_max))
     if lmbd_max == "scaled":
@@ -335,8 +325,8 @@ def _batch_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,
             D_hat = np.concatenate([D_hat, new_atom[None]])
             z_hat = lil.add_one_atom_in_z(z_hat)
 
-        if lmbd_max not in ['fixed', 'scaled']:
-            reg_ = reg * get_lambda_max(X, D_hat)
+        if lmbd_max not in ['fixed', 'scaled', 'scaled-block']:
+            reg_ = reg * get_lambda_max(X, D_hat, block=('block' in lmbd_max))
             if lmbd_max == 'shared':
                 reg_ = reg_.max()
 
@@ -429,8 +419,8 @@ def _online_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,
         if verbose > 1:
             print('[{}] CD iterations {} / {}'.format(name, ii, n_iter))
 
-        if lmbd_max not in ['fixed', 'scaled']:
-            reg_ = reg * get_lambda_max(X, D_hat)
+        if lmbd_max not in ['fixed', 'scaled', 'scaled-block']:
+            reg_ = reg * get_lambda_max(X, D_hat, block=('block' in lmbd_max))
             if lmbd_max == 'shared':
                 reg_ = reg_.max()
 
@@ -508,7 +498,8 @@ def get_iteration_func(eps, stopping_pobj, callback, lmbd_max, name, verbose,
         dz = (pobj[-3] - pobj[-2]) / min(pobj[-3], pobj[-2])
         du = (pobj[-2] - pobj[-1]) / min(pobj[-2], pobj[-1])
 
-        if ((dz < eps or du < eps) and lmbd_max in ['fixed', 'scaled']):
+        if ((dz < eps or du < eps) and
+            lmbd_max in ['fixed', 'scaled', 'scaled-block']):
             if dz < 0 and raise_on_increase:
                 raise RuntimeError(
                     "The z update have increased the objective value by {}."
