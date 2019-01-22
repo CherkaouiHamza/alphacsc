@@ -6,8 +6,6 @@ import numpy as np
 cimport numpy as cnp
 cnp.import_array()
 
-from alphacsc.utils import get_D
-
 
 cdef _sparse_conv_d(object[:] z_i_data,
                     object[:] z_i_rows,
@@ -69,7 +67,7 @@ def _fast_sparse_convolve_multi_uv(zi_lil, uv, n_channels, compute_D=True):
     n_times = n_times_valid + n_times_atom - 1
     Xi = np.zeros((n_channels, n_times))
     if compute_D:
-        D = get_D(uv, n_channels)
+        D = uv[:, :n_channels, None] * uv[:, None, n_channels:]  # use get_D
         return _sparse_conv_d(zi_lil.data, zi_lil.rows, D, Xi)
     else:
         u = uv[:, :n_channels]
