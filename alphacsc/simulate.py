@@ -168,9 +168,11 @@ def gen_fmri_synth_data(_P=10000, _T=300, L=30, sigma=0.1, random_seed=None):
     v /= np.linalg.norm(v)
 
     # normalized each u_i
-    s = 10
+    s = int(np.sqrt(_P) / 10.0)
+    assert s != 0, "gen_fmri_synth_data called with P too small"
     n_r = n_c = int(np.sqrt(_P) / (2 * s))
     p = 2 * n_r * s
+
     u_0 = _gen_checkerboard(n_r, n_c, s)
     u_0 = u_0.flatten()[:, None]
     u_1 = np.abs(u_0 - 1.0)

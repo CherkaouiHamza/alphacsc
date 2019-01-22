@@ -10,7 +10,7 @@ import numba
 import numpy as np
 
 from .. import cython_code
-from .lil import get_z_shape, is_lil
+from .lil import get_z_shape, is_lil, is_list_of_lil
 
 
 def construct_X(z, ds):

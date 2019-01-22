@@ -418,7 +418,7 @@ class BatchCDLfMRIFixedHRF(ConvolutionalDictionaryLearning):
         # allow to try multiple init
         for ii in range(1, nb_fit_try+1):
             if self.verbose:
-                print("Run: {}/{}".format(ii, nb_fit_try))
+                print("[{}] Fitting: {}/{}".format(self.name, ii, nb_fit_try))
 
             # custom init by fixing v
             uv_init = init_dictionary(
@@ -460,7 +460,7 @@ class BatchCDLfMRIFixedHRF(ConvolutionalDictionaryLearning):
         res = results[best_run]
 
         if self.verbose == 1:
-            print("Best run: {}".format(best_run+1))
+            print("[{}] Best fitting: {}".format(self.name, best_run+1))
 
         self._pobj, self._times, self._D_hat, self._z_hat, self.reg_ = res
         self.n_channels_ = X.shape[1]
