@@ -435,8 +435,6 @@ def _l2_gradient_d(D, X=None, z=None, constants=None, loss_params={}):
         if D.ndim == 2:
             if loss_params.get('block', False):
                 ztz_D = numpy_convolve_v(constants['ztz_v'], D)
-                ztz_D_ = numpy_convolve_uv(constants['ztz'], D)
-                np.testing.assert_allclose(ztz_D, ztz_D_)
             else:
                 ztz_D = numpy_convolve_uv(constants['ztz'], D)
         else:
