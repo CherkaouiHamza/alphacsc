@@ -13,6 +13,7 @@ alphacsc/cython_code/*.c
 build
 figures
 save_exp
+results_*
 
 # tools directories
 dist

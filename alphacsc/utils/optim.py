@@ -144,7 +144,7 @@ def fista(f_obj, f_grad, f_prox, step_size, x0, max_iter, momentum=False,
         if verbose > 1:
             print('[{}] did not converge'.format(name))
     if verbose > 5:
-        print('[{}]: {} iterations'.format(name, ii + 1))
+        print('[{}] {} iterations'.format(name, ii + 1))
 
     if timing:
         return x, pobj, times

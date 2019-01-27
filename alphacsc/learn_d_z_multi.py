@@ -330,7 +330,7 @@ def _batch_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,
             if lmbd_max == 'shared':
                 reg_ = reg_.max()
 
-        assert np.all(reg_ > 0), "Lambda < 0 ..."
+        assert np.all(reg_ >= 0), "Lambda < 0 ..."
 
         if verbose > 5:
             print('[{}] lambda = {:.3e}'.format(name, np.mean(reg_)))
@@ -424,7 +424,7 @@ def _online_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,
             if lmbd_max == 'shared':
                 reg_ = reg_.max()
 
-        assert np.all(reg_ > 0), "Lambda < 0 ..."
+        assert np.all(reg_ >= 0), "Lambda < 0 ..."
 
         if verbose > 5:
             print('[{}] lambda = {:.3e}'.format(name, np.mean(reg_)))

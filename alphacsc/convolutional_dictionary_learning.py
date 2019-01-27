@@ -14,6 +14,7 @@ from .update_z_multi import update_z_multi
 from .utils.dictionary import get_D, get_uv
 from .learn_d_z_multi import learn_d_z_multi
 from .loss_and_gradient import construct_X_multi
+from .utils.hrf_model import spm_hrf
 
 
 DOC_FMT = """{desc}
@@ -386,20 +387,28 @@ class BatchCDLfMRIFixedHRF(ConvolutionalDictionaryLearning):
 
     _default_dict = dict(block=True, proba_map=True)
 
-    def __init__(self, n_atoms, v, reg=0.1, n_iter=60, n_jobs=1,
-                 solver_z='fista', solver_z_kwargs={}, unbiased_z_hat=False,
-                 solver_d='only_u_adaptive', solver_d_kwargs={},
-                 rank1=True, window=False, uv_constraint='separate',
-                 positivity=False, proba_map=True, lmbd_max='scaled-block',
-                 eps=1e-10, D_init=None, D_init_params={}, verbose=1,
-                 random_state=None, sort_atoms=False):
+    def __init__(self, n_atoms, v=None, n_times_atom=None, t_r=None, reg=0.1,
+                 n_iter=60, n_jobs=1, solver_z='fista', solver_z_kwargs={},
+                 unbiased_z_hat=False, solver_d='only_u_adaptive',
+                 solver_d_kwargs={}, rank1=True, window=False,
+                 uv_constraint='separate', positivity=False, proba_map=True,
+                 lmbd_max='scaled-block', eps=1e-10, D_init=None,
+                 D_init_params={}, verbose=1, random_state=None,
+                 sort_atoms=False):
 
-        self.v = v  # fixed HRF
+        if v is None:
+            msg = (" if v is not specified,"
+                   "n_times_atom and t_r should be given.")
+            assert n_times_atom is not None and t_r is not None, msg
+            self.v = spm_hrf(t_r, n_times_atom)
+        else:
+            self.v = v
+
         _default_dict = dict(block=True,
                              proba_map=proba_map)  # reg. on spatial map
 
         super().__init__(
-            n_atoms=n_atoms, n_times_atom=len(v), reg=reg, n_iter=n_iter,
+            n_atoms=n_atoms, n_times_atom=len(self.v), reg=reg, n_iter=n_iter,
             solver_z=solver_z, solver_z_kwargs=solver_z_kwargs,
             rank1=rank1, positivity=positivity, window=window,
             uv_constraint=uv_constraint, unbiased_z_hat=unbiased_z_hat,
