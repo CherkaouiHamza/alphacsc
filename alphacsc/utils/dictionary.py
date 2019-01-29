@@ -69,9 +69,14 @@ def get_lambda_max(X, D_hat, sample_weights=None, block=False):
     n_trials, n_channels, n_times = X.shape
 
     if block:
-        return np.array([_dense_tr_conv_d(X_i, D=D_hat,
-                                          n_channels=n_channels).max(axis=1)
-                                          for X_i in X])
+        return np.array([np.max(np.abs(
+                            np.fliplr(np.cumsum(np.fliplr(
+                                _dense_tr_conv_d(X_i,
+                                                D=D_hat,
+                                                n_channels=n_channels)[:, None]),
+                                                axis=-1))),
+                                                axis=-1) for X_i in X])
+
     else:
         if sample_weights is None:
             # no need for the last dimension if we only have ones

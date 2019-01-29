@@ -184,7 +184,7 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
     _lmbd_max = get_lambda_max(X, D_hat, block=('block' in lmbd_max)).max()
     if verbose > 1:
         print("[{}] Max value for lambda: {}".format(name, _lmbd_max))
-    if lmbd_max == "scaled":
+    if lmbd_max in ["scaled", "scaled-block"]:
         reg = reg * _lmbd_max
 
     def compute_z_func(X, z_hat, D_hat, reg=None):
@@ -499,7 +499,7 @@ def get_iteration_func(eps, stopping_pobj, callback, lmbd_max, name, verbose,
         du = (pobj[-2] - pobj[-1]) / min(pobj[-2], pobj[-1])
 
         if ((dz < eps or du < eps) and
-            lmbd_max in ['fixed', 'scaled', 'scaled-block']):
+           lmbd_max in ['fixed', 'scaled', 'scaled-block']):
             if dz < 0 and raise_on_increase:
                 raise RuntimeError(
                     "The z update have increased the objective value by {}."
