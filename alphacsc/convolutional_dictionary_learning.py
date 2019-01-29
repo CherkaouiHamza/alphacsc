@@ -389,7 +389,7 @@ class BatchCDLfMRIFixedHRF(ConvolutionalDictionaryLearning):
 
     def __init__(self, n_atoms, v=None, n_times_atom=None, t_r=None, reg=0.1,
                  n_iter=60, n_jobs=1, solver_z='fista', solver_z_kwargs={},
-                 unbiased_z_hat=False, solver_d='only_u_adaptive',
+                 unbiased_z_hat=False, solver_d='only_u',
                  solver_d_kwargs={}, rank1=True, window=False,
                  uv_constraint='separate', positivity=False, proba_map=True,
                  lmbd_max='scaled-block', eps=1e-10, D_init=None,
