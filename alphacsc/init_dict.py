@@ -147,7 +147,7 @@ def kmeans_init(X, n_atoms, n_times_atom, max_iter=0, random_state=None,
     """
     rng = check_random_state(random_state)
 
-    n_trials, n_channels, n_times = X.shape
+    n_trials, n_channels, _ = X.shape
     X_original = X
     if distances != 'euclidean':
         # Only take the strongest channels, otherwise X is too big
@@ -156,7 +156,7 @@ def kmeans_init(X, n_atoms, n_times_atom, max_iter=0, random_state=None,
         X = X[:, strongest_channels[-n_strong_channels:], :]
 
     X = X.reshape(-1, X.shape[-1])
-    n_trials, n_times = X.shape
+    n_trials, _ = X.shape
 
     # Time step between two windows
     step = max(1, n_times_atom // 3)
