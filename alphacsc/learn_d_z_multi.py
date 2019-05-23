@@ -27,8 +27,32 @@ _default_dict_values = {'gamma': 0.1, 'sakoe_chiba_band': 10, 'ordar': 10,
                         'block': False}
 
 
-def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
-                    lmbd_max='fixed', reg=0.1, loss='l2',
+def _debug_cost(X, z_hat, uv_hat, reg_z=None, reg_u=None):
+    """ tmp debug fonction to compute global cost-func.
+    """
+    n_trials, n_channels, n_times = X.shape
+    n_trials, n_atoms, _ = z_hat.shape
+    u_hat, v = uv_hat[:, :n_channels], uv_hat[0, n_channels:]
+    Lz_hat = np.cumsum(z_hat, axis=-1)
+    vLz_hat = np.zeros((n_trials, n_atoms, n_times))
+    for i in range(n_trials):
+        for k in range(n_atoms):
+            vLz_hat[i, k, :] = np.convolve(Lz_hat[i, k, :], v)
+    X_hat = np.zeros((n_trials, n_channels, n_times))
+    for i in range(n_trials):
+        for k in range(n_atoms):
+            X_hat_k = u_hat[k, :][:, None].dot(vLz_hat[i, k, :][None, :])
+            X_hat[i, :, :] += X_hat_k
+    cost = 0.5 * np.dot((X - X_hat).ravel(), (X - X_hat).ravel())
+    if reg_z is not None:
+        cost += reg_z * np.sum(np.abs(z_hat))
+    if reg_u is not None:
+        cost += reg_u * np.sum(u_hat)
+    return cost
+
+
+def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1, n_jobs_u=1,
+                    lmbd_max='fixed', reg=0.1, reg_u=None, loss='l2',
                     loss_params=dict(**_default_dict_values),
                     rank1=True, uv_constraint='separate', positivity=True,
                     eps=1e-10, algorithm='batch', algorithm_params=dict(),
@@ -63,10 +87,14 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
           - 'per_atom': the regularization parameter is set per atom and at
             each iteration as a ratio of its maximal value for this atom i.e.
             reg_used[k] = reg * lmbd_max(uv_hat[k])
+    reg_u : float
+        The regularization parameter for the spatial maps
     n_iter : int
         The number of coordinate-descent iterations.
     n_jobs : int
         The number of parallel jobs.
+    n_jobs_u : int
+        The number of parallel jobs for the D update.
     loss : 'l2' | 'dtw'
         Loss for the data-fit term. Either the norm l2 or the soft-DTW.
     loss_params : dict
@@ -158,6 +186,8 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
         "'per_atom', 'shared'}, not '{}'".format(lmbd_max)
     )
 
+    X = X.astype(np.float64)  # force type for data
+
     n_trials, n_channels, n_times = X.shape
     n_times_valid = n_times - n_times_atom + 1
 
@@ -194,15 +224,15 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
                               positivity=positivity, n_jobs=n_jobs,
                               return_ztz=True)
 
-    def obj_func(X, z_hat, D_hat, reg=None, return_X_hat=False):
+    def obj_func(X, z_hat, D_hat, reg=None, reg_u=None, return_X_hat=False):
         return compute_X_and_objective_multi(X, z_hat, D_hat,
-                                             reg=reg, loss=loss,
+                                             reg=reg, reg_u=reg_u, loss=loss,
                                              loss_params=loss_params,
                                              uv_constraint=uv_constraint,
                                              feasible_evaluation=True,
                                              return_X_hat=return_X_hat)
 
-    d_kwargs = dict(verbose=verbose, eps=1e-8)
+    d_kwargs = dict(verbose=verbose, eps=1e-12)
     d_kwargs.update(solver_d_kwargs)
     if algorithm == "stochastic":
         # The typical stochastic algorithm samples one signal, compute the
@@ -212,11 +242,11 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
 
     def compute_d_func(X, z_hat, D_hat, constants):
         if rank1:
-            return update_uv(X, z_hat, uv_hat0=D_hat, constants=constants,
-                             b_hat_0=b_hat_0, solver_d=solver_d,
-                             uv_constraint=uv_constraint, loss=loss,
-                             loss_params=loss_params, window=window,
-                             **d_kwargs)
+            return update_uv(X, z_hat, reg=reg_u, uv_hat0=D_hat,
+                             constants=constants, b_hat_0=b_hat_0,
+                             solver_d=solver_d, uv_constraint=uv_constraint,
+                             loss=loss, loss_params=loss_params, window=window,
+                             n_jobs=n_jobs_u, **d_kwargs)
         else:
             return update_d(X, z_hat, D_hat0=D_hat, constants=constants,
                             b_hat_0=b_hat_0, solver_d=solver_d,
@@ -234,7 +264,8 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
                   compute_d_func=compute_d_func, obj_func=obj_func,
                   end_iter_func=end_iter_func, n_iter=n_iter, verbose=verbose,
                   random_state=random_state, window=window, reg=reg,
-                  lmbd_max=lmbd_max, name=name, uv_constraint=uv_constraint)
+                  reg_u=reg_u, lmbd_max=lmbd_max, name=name,
+                  uv_constraint=uv_constraint)
     kwargs.update(algorithm_params)
 
     if algorithm == 'batch':
@@ -279,9 +310,9 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
 
 def _batch_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,
                  obj_func, end_iter_func, n_iter=100,
-                 lmbd_max='fixed', reg=None, verbose=0, greedy=False,
-                 random_state=None, name="batch", uv_constraint='separate',
-                 window=False):
+                 lmbd_max='fixed', reg=None, reg_u=None, verbose=0,
+                 greedy=False, random_state=None, name="batch",
+                 uv_constraint='separate', window=False):
 
     reg_ = reg
 
@@ -308,6 +339,7 @@ def _batch_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,
     # monitor cost function
     times = [0]
     pobj = [obj_func(X, z_hat, D_hat, reg=reg_)]
+    pobj_ = [_debug_cost(X, z_hat, D_hat, reg, reg_u)]  # XXX
 
     for ii in range(n_iter):  # outer loop of coordinate descent
         if verbose == 1:
@@ -342,14 +374,14 @@ def _batch_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,
 
         # monitor cost function
         times.append(time.time() - start)
-        pobj.append(obj_func(X, z_hat, D_hat, reg=reg_))
+        pobj.append(obj_func(X, z_hat, D_hat, reg=reg_, reg_u=reg_u))
+        pobj_.append(_debug_cost(X, z_hat, D_hat, reg, reg_u))  # XXX
 
         z_nnz, z_size = lil.get_nnz_and_size(z_hat)
         if verbose > 5:
             print("[{}] sparsity: {:.3e}".format(
                 name, z_nnz.sum() / z_size))
-            print('[{}] Objective (z) : {:.3e} ({:.4}s)'.format(name,
-                                                                pobj[-1],
+            print('[{}] Objective (z) : {:.3e} ({:.4}s)'.format(name, pobj[-1],
                                                                 times[-1]))
 
         if np.all(z_nnz == 0):
@@ -365,7 +397,8 @@ def _batch_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,
 
         # monitor cost function
         times.append(time.time() - start)
-        pobj.append(obj_func(X, z_hat, D_hat, reg=reg_))
+        pobj.append(obj_func(X, z_hat, D_hat, reg=reg_, reg_u=reg_u))
+        pobj_.append(_debug_cost(X, z_hat, D_hat, reg, reg_u))  # XXX
 
         null_atom_indices = np.where(z_nnz == 0)[0]
         if len(null_atom_indices) > 0:
@@ -376,14 +409,13 @@ def _batch_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,
                 print('[{}] Resampled atom {}'.format(name, k0))
 
         if verbose > 5:
-            print('[{}] Objective (d) : {:.3e} ({:.4}s)'.format(name,
-                                                                pobj[-1],
+            print('[{}] Objective (d) : {:.3e} ({:.4}s)'.format(name, pobj[-1],
                                                                 times[-1]))
 
         if end_iter_func(X, z_hat, D_hat, pobj, ii):
             break
 
-    return pobj, times, D_hat, z_hat
+    return pobj_, times, D_hat, z_hat
 
 
 def _online_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,

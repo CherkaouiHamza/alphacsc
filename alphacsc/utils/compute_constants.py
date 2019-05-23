@@ -96,6 +96,8 @@ def compute_ztX(z, X):
     return ztX
 
 
+@numba.jit((numba.float64[:, :, :], numba.float64[:, :], numba.int64),
+           nopython=True, cache=True)
 def compute_ztz_v(ztz, uv, n_channels):
     """
     ztz.shape = n_atoms, n_atoms, 2 * n_times_atom - 1

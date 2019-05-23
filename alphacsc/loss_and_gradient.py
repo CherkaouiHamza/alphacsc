@@ -30,7 +30,8 @@ def _assert_dtw():
 
 
 def compute_objective(X=None, X_hat=None, z_hat=None, D=None,
-                      constants=None, reg=None, loss='l2', loss_params=dict()):
+                      constants=None, reg=None, loss='l2',
+                      loss_params=dict()):
     """Compute the value of the objective function
 
     Parameters
@@ -83,8 +84,9 @@ def compute_objective(X=None, X_hat=None, z_hat=None, D=None,
     return obj
 
 
-def compute_X_and_objective_multi(X, z_hat, D_hat=None, reg=None, loss='l2',
-                                  loss_params=dict(), feasible_evaluation=True,
+def compute_X_and_objective_multi(X, z_hat, D_hat=None, reg=None, reg_u=None,
+                                  loss='l2', loss_params=dict(),
+                                  feasible_evaluation=True,
                                   uv_constraint='joint', return_X_hat=False):
     """Compute X and return the value of the objective function
 
@@ -138,6 +140,15 @@ def compute_X_and_objective_multi(X, z_hat, D_hat=None, reg=None, loss='l2',
 
     cost = compute_objective(X=X, X_hat=X_hat, z_hat=z_hat, reg=reg, loss=loss,
                              loss_params=loss_params)
+
+    if reg_u is not None:
+        if D_hat.ndim == 2:
+            n_channels = X.shape[1]
+            u_hat = D_hat[:, :n_channels]
+        if isinstance(reg_u, (int, float)):
+            if not loss_params.get("proba_map", False):
+                cost += reg_u * np.sum(np.square(u_hat))
+
     if return_X_hat:
         return cost, X_hat
     return cost
@@ -443,9 +454,9 @@ def _l2_gradient_d(D, X=None, z=None, constants=None, loss_params={}):
 
     else:
         n_channels = X.shape[1]
-        # add a discrete integration operator to get a TV regularization in the
-        # synthetic formulation
         if loss_params.get("block", False):
+            # add a discrete integration operator to get a TV regularization
+            # in the synthetic formulation
             z = np.cumsum(z, axis=-1)
         residual = construct_X_multi(z, D=D, n_channels=n_channels) - X
         return None, _dense_tr_conv_z(residual, z)
@@ -459,7 +470,10 @@ def _l2_objective(X=None, X_hat=None, D=None, constants=None):
         if D.ndim == 2:
             # rank 1 dictionary, use uv computation
             n_channels = constants['n_channels']
-            grad_d = .5 * numpy_convolve_uv(constants['ztz'], D)
+            if 'ztz_v' in constants:
+                grad_d = .5 * numpy_convolve_v(constants['ztz_v'], D)
+            else:
+                grad_d = .5 * numpy_convolve_uv(constants['ztz'], D)
             grad_d -= constants['ztX']
             cost = (grad_d * D[:, None, n_channels:]).sum(axis=2)
             cost = np.dot(cost.ravel(), D[:, :n_channels].ravel())
@@ -475,6 +489,52 @@ def _l2_objective(X=None, X_hat=None, D=None, constants=None):
     assert X is not None and X_hat is not None
     residual = X - X_hat
     return 0.5 * np.dot(residual.ravel(), residual.ravel())
+
+
+def obj_u(u, X, reg, constants):
+    """ l2_objective_u for a single voxel."""
+    vLz = constants['vLz']
+    n_trials = X.shape[0]
+    f = 0
+    for i in range(n_trials):
+        X_hat_i = vLz[i, :, :].T.dot(u)
+        f += 0.5 * np.sum(np.square(X[i, :] - X_hat_i.T))
+    return f + reg * np.sum(u)
+    # return f + reg * np.sum(np.square(u))
+
+
+def grad_u(u, reg, constants):
+    """ l2_gradient_u for a single voxel."""
+    vLztLzv = constants['vLztLzv']
+    vLztX = constants['vLztX']
+    grad = 0
+    for i in range(vLztX.shape[0]):
+        grad += vLztLzv[i, :, :].dot(u) - vLztX[i, :]
+    return grad + reg
+    # return grad + 2 * reg * u
+
+
+def obj_uj(u, x_j, reg, constants):
+    """ l2_objective_u for a single voxel."""
+    vLz = constants['vLz']
+    n_trials = x_j.shape[0]
+    f = 0
+    for i in range(n_trials):
+        x_j_hat = vLz[i, :, :].T.dot(u)
+        f += 0.5 * np.sum(np.square(x_j[i, :] - x_j_hat))
+    # return f + reg * np.sum(u)
+    return f + reg * np.sum(np.square(u))
+
+
+def grad_uj(u, reg, constants):
+    """ l2_gradient_u for a single voxel."""
+    vLztLzv = constants['vLztLzv']
+    vLztxj = constants['vLztxj']
+    grad = 0
+    for i in range(vLztxj.shape[0]):
+        grad += vLztLzv[i, :, :].dot(u) - vLztxj[i, :]
+    # return grad + reg
+    return grad + 2 * reg * u
 
 
 def _compute_DtD_z_i(z_i, DtD=None, D=None, n_channels=None, n_times=None):
@@ -522,9 +582,9 @@ def _l2_gradient_zi(Xi, z_i, D, loss_params=dict(), constants=None,
     grad : array, shape (n_atoms, n_times_valid)
         The gradient
     """
-    # add a discrete integration operator to get a TV regularization in the
-    # synthetic formulation
     if loss_params.get('block', False):
+        # add a discrete integration operator to get a TV regularization in the
+        # synthetic formulation
         z_i = np.cumsum(z_i, axis=-1)
 
     n_channels, _ = Xi.shape

@@ -46,16 +46,17 @@ shutil.copyfile(__file__, os.path.join(dirname, __file__))
 
 ###############################################################################
 # define data
-harvard_oxford = datasets.fetch_atlas_harvard_oxford(
-        'cort-maxprob-thr50-2mm', symmetric_split=True)
-atlas_data = harvard_oxford.maps.get_data()
-mask = atlas_data == harvard_oxford.labels.index('Right Precentral Gyrus')
-mask_img = image.new_img_like(harvard_oxford.maps, mask)
+# harvard_oxford = datasets.fetch_atlas_harvard_oxford(
+#         'cort-maxprob-thr50-2mm', symmetric_split=True)
+# atlas_data = harvard_oxford.maps.get_data()
+# mask = atlas_data == harvard_oxford.labels.index('Right Precentral Gyrus')
+# mask_img = image.new_img_like(harvard_oxford.maps, mask)
 subject_id = fetch_subject_list()[0]
 fmri_img = get_hcp_fmri_fname(subject_id)
-mask_img = image.resample_to_img(
-    mask_img, fmri_img, interpolation='nearest')
-masker = input_data.NiftiMasker(mask_img, t_r=TR_HCP, standardize=True)
+# mask_img = image.resample_to_img(
+#     mask_img, fmri_img, interpolation='nearest')
+# masker = input_data.NiftiMasker(mask_img, t_r=TR_HCP, standardize=True)
+masker = input_data.NiftiMasker(t_r=TR_HCP, standardize=True)
 X = masker.fit_transform(fmri_img).T
 X = X[None, :, :]
 N, P, T = X.shape
@@ -63,12 +64,13 @@ print("Data loaded shape: {}".format(X.shape))
 
 ###############################################################################
 # estimation of d an z
-random_seed = None
+random_seed = 0
 K = 8
 L = 30
-cdl = BatchCDLfMRIFixedHRF(n_atoms=K, n_times_atom=L, t_r=TR_HCP, reg=0.2,
-                           n_iter=100, proba_map=True, D_init='ssa',
-                           random_state=random_seed, verbose=1)
+cdl = BatchCDLfMRIFixedHRF(n_atoms=K, n_times_atom=L, t_r=TR_HCP, reg=0.1,
+                           reg_u=2.0, n_iter=100, map_regu='l2',
+                           D_init='ssa', solver_d='only_u_adaptive',
+                           n_jobs_u=3, random_state=random_seed, verbose=1)
 cdl.fit(X, nb_fit_try=3)
 pobj, times, uv_hat, z_hat = cdl.pobj_, cdl._times, cdl.uv_hat_, cdl.z_hat_
 

@@ -385,15 +385,13 @@ class BatchCDLfMRIFixedHRF(ConvolutionalDictionaryLearning):
     _default['algorithm'] = "    Batch algorithm\n"
     __doc__ = DOC_FMT.format(**_default)
 
-    _default_dict = dict(block=True, proba_map=True)
-
     def __init__(self, n_atoms, v=None, n_times_atom=None, t_r=None, reg=0.1,
-                 n_iter=60, n_jobs=1, solver_z='fista', solver_z_kwargs={},
-                 unbiased_z_hat=False, solver_d='only_u',
+                 reg_u=1.0, n_iter=60, n_jobs=1, n_jobs_u=1, solver_z='fista',
+                 solver_z_kwargs={}, unbiased_z_hat=False, solver_d='only_u',
                  solver_d_kwargs={}, rank1=True, window=False,
-                 uv_constraint='separate', positivity=False, proba_map=True,
-                 lmbd_max='scaled-block', eps=1e-24, D_init=None,
-                 D_init_params={}, verbose=1, random_state=None,
+                 uv_constraint='separate', positivity=False,
+                 map_regu="proba-map", lmbd_max='scaled-block', eps=1e-24,
+                 D_init=None, D_init_params={}, verbose=1, random_state=None,
                  sort_atoms=False):
 
         if v is None:
@@ -404,12 +402,14 @@ class BatchCDLfMRIFixedHRF(ConvolutionalDictionaryLearning):
         else:
             self.v = v
 
-        _default_dict = dict(block=True,
-                             proba_map=proba_map)  # reg. on spatial map
+        _default_dict = dict(block=True, map_regu=map_regu)
+
+        self.reg_u = reg_u
+        self.n_jobs_u = n_jobs_u
 
         super().__init__(
-            n_atoms=n_atoms, n_times_atom=len(self.v), reg=reg, n_iter=n_iter,
-            solver_z=solver_z, solver_z_kwargs=solver_z_kwargs,
+            n_atoms=n_atoms, n_times_atom=len(self.v), reg=reg,
+            n_iter=n_iter, solver_z=solver_z, solver_z_kwargs=solver_z_kwargs,
             rank1=rank1, positivity=positivity, window=window,
             uv_constraint=uv_constraint, unbiased_z_hat=unbiased_z_hat,
             sort_atoms=sort_atoms, solver_d=solver_d,
@@ -444,7 +444,7 @@ class BatchCDLfMRIFixedHRF(ConvolutionalDictionaryLearning):
             # fitting the model
             res = learn_d_z_multi(
                 X, self.n_atoms, self.n_times_atom,
-                reg=self.reg, lmbd_max=self.lmbd_max,
+                reg=self.reg, lmbd_max=self.lmbd_max, reg_u=self.reg_u,
                 loss=self.loss, loss_params=self.loss_params,
                 rank1=self.rank1, positivity=self.positivity,
                 window=self.window, uv_constraint=self.uv_constraint,
@@ -457,7 +457,8 @@ class BatchCDLfMRIFixedHRF(ConvolutionalDictionaryLearning):
                 use_sparse_z=self.use_sparse_z, unbiased_z_hat=False,
                 verbose=self.verbose, callback=self.callback,
                 random_state=self.random_state, n_jobs=self.n_jobs,
-                name=self.name, raise_on_increase=self.raise_on_increase,
+                n_jobs_u=self.n_jobs_u, name=self.name,
+                raise_on_increase=self.raise_on_increase,
                 sort_atoms=self.sort_atoms,
                 )
 

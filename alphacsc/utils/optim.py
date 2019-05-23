@@ -65,6 +65,7 @@ def fista(f_obj, f_grad, f_prox, step_size, x0, max_iter, momentum=False,
         times = [0.0]
         start = time.time()
 
+    # debug = True  # XXX
     pobj = None
     if debug:
         pobj = [f_obj(x0)]
@@ -145,6 +146,12 @@ def fista(f_obj, f_grad, f_prox, step_size, x0, max_iter, momentum=False,
             print('[{}] did not converge'.format(name))
     if verbose > 5:
         print('[{}] {} iterations'.format(name, ii + 1))
+
+    # import matplotlib.pyplot as plt
+    # plt.figure(name)
+    # plt.plot(pobj)
+    # plt.title("cost-function")
+    # plt.show()
 
     if timing:
         return x, pobj, times

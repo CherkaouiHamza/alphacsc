@@ -8,7 +8,7 @@ from alphacsc.utils.compute_constants import compute_DtD
 from alphacsc.utils.whitening import whitening
 from alphacsc.loss_and_gradient import (gradient_d, gradient_zi,
                                         compute_X_and_objective_multi,
-                                        _l2_gradient_zi,
+                                        _l2_gradient_zi, obj_uj, grad_uj,
                                         _dense_tr_conv_d)
 
 
@@ -170,6 +170,37 @@ def test_gradients(loss):
     gradient_checker(pobj_z, grad_z, n_atoms * n_times_valid,
                      n_checks=n_checks, debug=True, grad_name=_grad_name,
                      rtol=1e-4)
+
+
+def test_grad_uj():
+    """ Check that the gradients with approx_fprime Scipy function.
+    """
+    seed = 0
+    rng = np.random.RandomState(seed)
+    n_trials, n_atoms, n_times = 1, 10, 100
+    reg = 1.0
+
+    x_j = rng.randn(n_trials, n_times)
+    vLz = rng.randn(n_trials, n_atoms, n_times)
+
+    vLztLzv = np.zeros((n_trials, n_atoms, n_atoms))
+    for i in range(n_trials):
+        vLztLzv[i, :, :] = vLz[i, :, :].dot(vLz[i, :, :].T)
+
+    vLztxj = np.zeros((n_trials, n_atoms))
+    for i in range(n_trials):
+        vLztxj[i, :] = vLz[i, :, :].dot(x_j[i, :])
+
+    constants = dict(vLztLzv=vLztLzv, vLztxj=vLztxj, vLz=vLz)
+
+    def _obj_uj(u):
+        return obj_uj(u, x_j, reg, constants)
+
+    def _grad_uj(u):
+        return grad_uj(u, reg, constants)
+
+    gradient_checker(_obj_uj, _grad_uj, n_atoms, n_checks=5, debug=True,
+                     grad_name="grad_uj", rtol=1e-4, random_seed=seed)
 
 
 @pytest.mark.parametrize('ds', ['D', 'uv'])

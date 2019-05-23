@@ -5,17 +5,19 @@
 #          Thomas Moreau <thomas.moreau@inria.fr>
 #          Hamza Cherkaoui <hamza.cherkaoui@inria.fr>
 
+from joblib import Parallel, delayed
 import numpy as np
 
 from . import cython_code
 from .utils.lil import get_z_shape, is_list_of_lil
 from .utils.optim import fista, power_iteration
-from .utils.convolution import numpy_convolve_uv
+from .utils.convolution import numpy_convolve_uv, numpy_convolve_v
 from .utils.compute_constants import compute_ztz, compute_ztX, compute_ztz_v
 from .utils.dictionary import tukey_window
 
 from .loss_and_gradient import compute_objective, compute_X_and_objective_multi
 from .loss_and_gradient import gradient_uv, gradient_d
+from .loss_and_gradient import obj_uj, grad_uj, obj_u, grad_u
 
 
 def prox_uv(uv, uv_constraint='joint', n_channels=None,
@@ -51,10 +53,11 @@ def prox_d(D, return_norm=False):
         return D
 
 
-def update_uv(X, z, uv_hat0, constants=None, b_hat_0=None, debug=False,
-              max_iter=300, eps=None, solver_d='alternate', momentum=False,
-              uv_constraint='separate', loss='l2', loss_params=dict(),
-              verbose=0, window=False):
+def update_uv(X, z, uv_hat0, reg=None, constants=None,
+              b_hat_0=None, debug=False, max_iter=300, eps=None,
+              solver_d='alternate', momentum=False, uv_constraint='separate',
+              loss='l2', loss_params=dict(), n_jobs=1, verbose=0,
+              window=False):
     """Learn d's in time domain.
 
     Parameters
@@ -65,6 +68,8 @@ def update_uv(X, z, uv_hat0, constants=None, b_hat_0=None, debug=False,
         Can also be a list of n_trials LIL-sparse matrix of shape
             (n_atoms, n_times - n_times_atom + 1)
         The code for which to learn the atoms
+    reg : float
+        The regularization parameter for the spatial maps
     uv_hat0 : array, shape (n_atoms, n_channels + n_times_atom)
         The initial atoms.
     constants : dict or None
@@ -124,13 +129,6 @@ def update_uv(X, z, uv_hat0, constants=None, b_hat_0=None, debug=False,
                                              feasible_evaluation=True,
                                              uv_constraint=uv_constraint)
 
-    if (loss_params.get("proba_map", False) and
-            solver_d not in ['only_u', 'only_u_adaptive']):
-        raise ValueError(
-             "For now, proba_map can only be used in"
-             "['alternate', 'alternate_adaptive', 'only_u', 'only_u_adaptive']"
-             )
-
     if solver_d in ['joint', 'fista']:
         # use FISTA on joint [u, v], with an adaptive step size
 
@@ -158,46 +156,16 @@ def update_uv(X, z, uv_hat0, constants=None, b_hat_0=None, debug=False,
                              adaptive_step_size=True, debug=debug,
                              name="Update uv")
 
-    elif solver_d in ['alternate', 'alternate_adaptive', 'only_u',
-                      'only_u_adaptive']:
-        # use FISTA on alternate u and v
+    elif solver_d in ['alternate', 'alternate_adaptive']:
 
         adaptive_step_size = 'adaptive' in solver_d
 
         uv_hat = uv_hat0.copy()
         u_hat, v_hat = uv_hat[:, :n_channels], uv_hat[:, n_channels:]
 
-        if loss_params.get("proba_map", False):
-            def _prox_simplex(u_i, lbda):
-                """ proximal operator of indicator function:
-                    I{ u_ij > 0 and sum_j u_ij = lbda}(u_i)
-                see https://math.stackexchange.com/questions/2402504/
-                    orthogonal-projection-onto-the-unit-simplex or
-                see https://dl.acm.org/citation.cfm?id=9680
-                """
-                assert u_i.ndim == 1, "u_i should be vector"
-
-                # sort in descent order: s = sort(u_i)
-                s = np.sort(u_i)[::-1]
-                # c(j) = ((sum(s(1:j)) - lbda ) / j
-                c = (np.cumsum(s) - lbda) / np.arange(1, len(u_i)+1)
-                # n = max{ j \in {1,...,B} : s(j) > c(j) }
-                if len([s > c]) > 0:
-                    m = np.arange(len(u_i))[s > c].max()
-                    return u_i - np.minimum(u_i, c[m])
-
-                else:
-                    p_u_i = np.zeros_like(u_i)
-                    p_u_i[np.argmax(u_i)] = np.max(u_i)
-                    return p_u_i
-
-            def prox_u(u, step_size=1.0):  # step_size=1.0: code legacy
-                # XXX sum_i u_i = 10.0 hardcoded
-                return np.r_[[_prox_simplex(u_i, lbda=10.0) for u_i in u]]
-        else:
-            def prox_u(u, step_size=1.0):  # step_size=1.0: code legacy
-                u /= np.maximum(1.0, np.linalg.norm(u, axis=1))[:, None]
-                return u
+        def prox_u(u, step_size=1.0):  # step_size=1.0: code legacy
+            u /= np.maximum(1.0, np.linalg.norm(u, axis=1))[:, None]
+            return u
 
         def prox_v(v, step_size=1.0):  # step_size=1.0: code legacy
             if window:
@@ -214,10 +182,6 @@ def update_uv(X, z, uv_hat0, constants=None, b_hat_0=None, debug=False,
             uv = np.c_[u, v_hat]
             return objective(uv)
 
-        if loss_params.get('block', False):
-            constants['ztz_v'] = compute_ztz_v(constants['ztz'],
-                                               uv_hat, n_channels)
-
         def _grad_u(u):
             if window:
                 uv = np.c_[u, v_hat * tukey_window_]
@@ -231,7 +195,7 @@ def update_uv(X, z, uv_hat0, constants=None, b_hat_0=None, debug=False,
             Lu = 1
         else:
             Lu = compute_lipschitz(uv_hat, constants, 'u', b_hat_0)
-        assert Lu > 0
+            assert Lu > 0, "Lipschitz constant is not positive..."
 
         u_hat, pobj_u = fista(_obj_u, _grad_u, prox_u, 0.99 / Lu, u_hat,
                               max_iter, momentum=momentum, eps=eps,
@@ -241,40 +205,181 @@ def update_uv(X, z, uv_hat0, constants=None, b_hat_0=None, debug=False,
 
         uv_hat = np.c_[u_hat, v_hat]
         if debug:
-            assert pobj_u[-1] <= pobj_u[0]
+            assert pobj_u[-1] <= pobj_u[0], "Cost-function increase..."
             pobj.extend(pobj_u)
 
         # update v
-        if solver_d not in ['only_u', 'only_u_adaptive']:
-            def _obj_v(v):
-                uv = np.c_[u_hat, v]
+        def _obj_v(v):
+            uv = np.c_[u_hat, v]
+            return objective(uv)
+
+        def _grad_v(v):
+            if window:
+                v = v * tukey_window_
+            uv = np.c_[u_hat, v]
+            grad_d = gradient_d(uv, X=X, z=z, constants=constants,
+                                loss=loss, loss_params=loss_params)
+            grad_v = (grad_d * uv[:, :n_channels, None]).sum(axis=1)
+            if window:
+                grad_v *= tukey_window_
+            return grad_v
+
+        if adaptive_step_size:
+            Lv = 1
+        else:
+            Lv = compute_lipschitz(uv_hat, constants, 'v', b_hat_0)
+        assert Lv > 0, "Lipschitz constant is not positive..."
+
+        v_hat, pobj_v = fista(
+                        _obj_v, _grad_v, prox_v, 0.99 / Lv,
+                        v_hat, max_iter, momentum=momentum,
+                        eps=eps, adaptive_step_size=adaptive_step_size,
+                        verbose=verbose, debug=debug, name="Update v")
+        uv_hat = np.c_[u_hat, v_hat]
+        if debug:
+            pobj.extend(pobj_v)
+
+    elif solver_d in ['only_u', 'only_u_adaptive']:
+
+        pobj = []  # for debug
+
+        adaptive_step_size = 'adaptive' in solver_d
+        parallelize_on_voxels = n_jobs > 1
+        map_regu = loss_params.get("map_regu", "proba-map")
+
+        uv_hat = uv_hat0.copy()
+        u_hat, v_hat = uv_hat[:, :n_channels], uv_hat[:, n_channels:]
+
+        if loss_params.get('block', False):
+            constants['ztz_v'] = compute_ztz_v(constants['ztz'],
+                                               uv_hat, n_channels)
+
+        if adaptive_step_size:
+            Lu = 1
+        else:
+            Lu = compute_lipschitz(uv_hat, constants, 'u', b_hat_0)
+            assert Lu > 0, "Lipschitz constant is not positive..."
+
+        if map_regu == "proba-map":
+
+            def _prox_simplex(u_i, lbda):
+                """ prox-op for: I{ u_ij > 0 and sum_j u_ij = lbda}(u_i)"""
+                s = np.sort(u_i)[::-1]
+                c = (np.cumsum(s) - lbda) / np.arange(1, len(u_i)+1)
+                if len([s > c]) > 0:
+                    m = np.arange(len(u_i))[s > c].max()
+                    return u_i - np.minimum(u_i, c[m])
+                else:
+                    p_u_i = np.zeros_like(u_i)
+                    p_u_i[np.argmax(u_i)] = np.max(u_i)
+                    return p_u_i
+
+            def prox_u(u, step_size=1.0):  # step_size=1.0: code legacy
+                # sum_i u_i = 10.0 hardcoded
+                return np.r_[[_prox_simplex(u_i, lbda=10.0) for u_i in u]]
+
+            def _obj_u(u):
+                uv = np.c_[u, v_hat]
                 return objective(uv)
 
-            def _grad_v(v):
+            def _grad_u(u):
                 if window:
-                    v = v * tukey_window_
-                uv = np.c_[u_hat, v]
+                    uv = np.c_[u, v_hat * tukey_window_]
+                else:
+                    uv = np.c_[u, v_hat]
                 grad_d = gradient_d(uv, X=X, z=z, constants=constants,
                                     loss=loss, loss_params=loss_params)
-                grad_v = (grad_d * uv[:, :n_channels, None]).sum(axis=1)
-                if window:
-                    grad_v *= tukey_window_
-                return grad_v
+                return (grad_d * uv[:, None, n_channels:]).sum(axis=2)
 
-            if adaptive_step_size:
-                Lv = 1
+            u_hat, pobj_u = fista(_obj_u, _grad_u, prox_u, 0.99 / Lu, u_hat,
+                                  max_iter, momentum=momentum, eps=eps,
+                                  adaptive_step_size=adaptive_step_size,
+                                  verbose=verbose, debug=debug,
+                                  name="Update u")
+
+        elif map_regu == "l2":
+
+            def prox_u(u, step_size=1.0):  # step_size=1.0: code legacy
+                return np.clip(u, 0.0, np.inf)
+
+            n_trials, _, n_times = X.shape
+            _, n_atoms, _ = z.shape
+
+            vLz = np.zeros((n_trials, n_atoms, n_times))
+            for i in range(n_trials):
+                for k in range(n_atoms):
+                    vLz[i, k, :] = np.convolve(z[i, k, :], v_hat[0, :])
+
+            vLztLzv = np.zeros((n_trials, n_atoms, n_atoms))
+            for i in range(n_trials):
+                vLztLzv[i, :, :] = vLz[i, :, :].dot(vLz[i, :, :].T)
+
+            constants_u = dict(vLz=vLz, vLztLzv=vLztLzv)
+
+            if parallelize_on_voxels:
+
+                def _update_uj(x_j, u_hat_j, reg, constants_u):
+                    vLz = constants_u['vLz']
+                    vLztLzv = constants_u['vLztLzv']
+
+                    n_trials, n_atoms, _ = vLztLzv.shape
+
+                    vLztxj = np.zeros((n_trials, n_atoms))
+                    for i in range(n_trials):
+                        vLztxj[i, :] = vLz[i, :, :].dot(x_j[i, :])
+                    constants_u['vLztxj'] = vLztxj
+
+                    def _obj_uj(u):
+                        return obj_uj(u, x_j, reg, constants_u)
+
+                    def _grad_uj(u):
+                        return grad_uj(u, reg, constants_u)
+
+                    u_hat, _ = fista(_obj_uj, _grad_uj, prox_u, 0.99 / Lu,
+                                     u_hat_j, max_iter, momentum=momentum,
+                                     eps=1.0e-10*eps, verbose=verbose, debug=False,
+                                     adaptive_step_size=adaptive_step_size,
+                                     name="Update uj")
+                    return u_hat
+
+                l_u_hat = Parallel(n_jobs=n_jobs)(
+                    delayed(_update_uj)(
+                        X[:, j, :], u_hat[:, j], reg, constants_u)
+                            for j in range(n_channels))
+                u_hat = np.c_[l_u_hat].T
+
             else:
-                Lv = compute_lipschitz(uv_hat, constants, 'v', b_hat_0)
-            assert Lv > 0
 
-            v_hat, pobj_v = fista(
-                            _obj_v, _grad_v, prox_v, 0.99 / Lv,
-                            v_hat, max_iter, momentum=momentum,
-                            eps=eps, adaptive_step_size=adaptive_step_size,
-                            verbose=verbose, debug=debug, name="Update v")
-            uv_hat = np.c_[u_hat, v_hat]
-            if debug:
-                pobj.extend(pobj_v)
+                vLz = constants_u['vLz']
+                vLztLzv = constants_u['vLztLzv']
+
+                n_trials, n_atoms, _ = vLztLzv.shape
+
+                vLztX = np.zeros((n_trials, n_atoms, n_channels))
+                for i in range(n_trials):
+                    vLztX[i, :, :] = vLz[i, :, :].dot(X[i, :].T)
+                constants_u['vLztX'] = vLztX
+
+                def _obj_u(u):
+                    return obj_u(u, X, reg, constants_u)
+
+                def _grad_u(u):
+                    return grad_u(u, reg, constants_u)
+
+                u_hat, pobj_u = fista(_obj_u, _grad_u, prox_u, 0.99 / Lu,
+                                      u_hat, max_iter, momentum=momentum,
+                                      eps=eps, verbose=verbose, debug=debug,
+                                      adaptive_step_size=adaptive_step_size,
+                                      name="Update u")
+
+        else:
+            raise ValueError("'map_regu' should be ['proba-map', 'l2']"
+                             ", got '{}'".format(map_regu))
+
+        uv_hat = np.c_[u_hat, v_hat]
+        if debug:
+            assert pobj_u[-1] <= pobj_u[0], "Cost-function increase..."
+            pobj.extend(pobj_u)
 
     else:
         raise ValueError('Unknown solver_d: %s' % (solver_d, ))
@@ -346,33 +451,27 @@ def update_d(X, z, D_hat0, constants=None, b_hat_0=None, debug=False,
         return compute_X_and_objective_multi(X, z, D_hat=D, loss=loss,
                                              loss_params=loss_params)
 
-    if True:  # only solver available here
-        # use FISTA on joint [u, v], with an adaptive step size
+    def grad(D):
+        if window:
+            D = D * tukey_window_
+        grad = gradient_d(D=D, X=X, z=z, constants=constants, loss=loss,
+                          loss_params=loss_params)
+        if window:
+            grad *= tukey_window_
+        return grad
 
-        def grad(D):
-            if window:
-                D = D * tukey_window_
-            grad = gradient_d(D=D, X=X, z=z, constants=constants, loss=loss,
-                              loss_params=loss_params)
-            if window:
-                grad *= tukey_window_
-            return grad
+    def prox(D, step_size=1.0):
+        if window:
+            D *= tukey_window_
+        D = prox_d(D)
+        if window:
+            D /= tukey_window_
+        return D
 
-        def prox(D, step_size=1.0):
-            if window:
-                D *= tukey_window_
-            D = prox_d(D)
-            if window:
-                D /= tukey_window_
-            return D
-
-        D_hat, pobj = fista(objective, grad, prox, None, D_hat0, max_iter,
-                            verbose=verbose, momentum=momentum, eps=eps,
-                            adaptive_step_size=True, debug=debug,
-                            name="Update D")
-
-    else:
-        raise ValueError('Unknown solver_d: %s' % (solver_d, ))
+    D_hat, pobj = fista(objective, grad, prox, None, D_hat0, max_iter,
+                        verbose=verbose, momentum=momentum, eps=eps,
+                        adaptive_step_size=True, debug=debug,
+                        name="Update D")
 
     if window:
         D_hat = D_hat * tukey_window_
@@ -412,26 +511,35 @@ def compute_lipschitz(uv0, constants, variable, b_hat_0=None):
     if b_hat_0 is None:
         b_hat_0 = np.random.randn(uv0.size)
 
-    def op_Hu(u):
-        u = np.reshape(u, (n_atoms, n_channels))
-        uv = np.c_[u, v0]
-        H_d = numpy_convolve_uv(constants['ztz'], uv)
-        H_u = (H_d * uv[:, None, n_channels:]).sum(axis=2)
-        return H_u.ravel()
-
-    def op_Hv(v):
-        v = np.reshape(v, (n_atoms, n_times_atom))
-        uv = np.c_[u0, v]
-        H_d = numpy_convolve_uv(constants['ztz'], uv)
-        H_v = (H_d * uv[:, :n_channels, None]).sum(axis=1)
-        return H_v.ravel()
-
     if variable == 'u':
         b_hat_u0 = b_hat_0.reshape(n_atoms, -1)[:, :n_channels].ravel()
         n_points = n_atoms * n_channels
-        L = power_iteration(op_Hu, n_points, b_hat_0=b_hat_u0)
+
+        def op_Hu(u):
+            u = np.reshape(u, (n_atoms, n_channels))
+            uv = np.c_[u, v0]
+            if 'ztz_v' in constants:
+                H_d = numpy_convolve_v(constants['ztz_v'], uv)
+            else:
+                H_d = numpy_convolve_uv(constants['ztz'], uv)
+            H_u = (H_d * uv[:, None, n_channels:]).sum(axis=2)
+            return H_u.ravel()
+
+        return power_iteration(op_Hu, n_points, b_hat_0=b_hat_u0)
+
     elif variable == 'v':
         b_hat_v0 = b_hat_0.reshape(n_atoms, -1)[:, n_channels:].ravel()
         n_points = n_atoms * n_times_atom
-        L = power_iteration(op_Hv, n_points, b_hat_0=b_hat_v0)
-    return L
+
+        def op_Hv(v):
+            v = np.reshape(v, (n_atoms, n_times_atom))
+            uv = np.c_[u0, v]
+            H_d = numpy_convolve_uv(constants['ztz'], uv)
+            H_v = (H_d * uv[:, :n_channels, None]).sum(axis=1)
+            return H_v.ravel()
+
+        return power_iteration(op_Hv, n_points, b_hat_0=b_hat_v0)
+
+    else:
+        raise ValueError("variable should be {'u', 'v'},"
+                         " got {}".format(variable))

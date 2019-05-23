@@ -38,38 +38,57 @@ shutil.copyfile(__file__, os.path.join(dirname, __file__))
 ###############################################################################
 # define data
 tmp = load_synth_fmri_data(_P=100, _T=100, L=30, snr=1.0, nb_square=4,
-                           random_seed=0)
+                           random_seed=None)
 noisy_X, X, uv, D, u_i, v, Lz, z, cst = tmp
 u_0, u_1 = u_i
 T, P, p, K, N, L = cst
 
 ###############################################################################
 # estimation of u an z
-cdl = BatchCDLfMRIFixedHRF(n_atoms=K, v=v, reg=0.2, reg_u=2.0,
-                           n_iter=100, map_regu='proba-map', D_init='ssa',
-                           random_state=0, n_jobs_u=1,
-                           solver_d='only_u_adaptive', verbose=1)
-cdl.fit(noisy_X, nb_fit_try=1)
-pobj, times, uv_hat, z_hat = cdl.pobj_, cdl._times, cdl.uv_hat_, cdl.z_hat_
+l_reg_z = np.linspace(0.0, 0.7, 5)
+l_reg_u = np.linspace(0.0, 10.0, 5)
+l_reg = list(itertools.product(l_reg_z, l_reg_u))
+l_err = []
+l_res = []
+for reg_z, reg_u in l_reg:
+    cdl = BatchCDLfMRIFixedHRF(n_atoms=K, v=v, reg=reg_z, reg_u=reg_u,
+                               n_iter=100, map_regu='l2', D_init='ssa',
+                               random_state=None, n_jobs_u=2,
+                               solver_d='only_u_adaptive', verbose=1)
+    cdl.fit(noisy_X, nb_fit_try=3)
+    pobj, times, uv_hat, z_hat = cdl.pobj_, cdl._times, cdl.uv_hat_, cdl.z_hat_
 
-z_hat = z_hat[0, :, :]
-Lz_hat = np.cumsum(z_hat, axis=-1)
-u_hat, v_hat = uv_hat[:, :P], uv_hat[0, P:]
+    z_hat = z_hat[0, :, :]
+    Lz_hat = np.cumsum(z_hat, axis=-1)
+    u_hat, v_hat = uv_hat[:, :P], uv_hat[0, P:]
 
-u_0_hat = u_hat[0, :]
-u_1_hat = u_hat[1, :]
-Lz_0_hat = Lz_hat[0, :].T
-Lz_1_hat = Lz_hat[1, :].T
+    u_0_hat = u_hat[0, :]
+    u_1_hat = u_hat[1, :]
+    Lz_0_hat = Lz_hat[0, :].T
+    Lz_1_hat = Lz_hat[1, :].T
 
-prod_scal_0 = np.dot(Lz_0_hat.flat, Lz[0, 0, :].T.flat)
-prod_scal_1 = np.dot(Lz_0_hat.flat, Lz[0, 1, :].T.flat)
-if prod_scal_0 < prod_scal_1:
-    tmp = Lz_0_hat
-    Lz_0_hat = Lz_1_hat
-    Lz_1_hat = tmp
-    tmp = u_0_hat
-    u_0_hat = u_1_hat
-    u_1_hat = tmp
+    prod_scal_0 = np.dot(Lz_0_hat.flat, Lz[0, 0, :].T.flat)
+    prod_scal_1 = np.dot(Lz_0_hat.flat, Lz[0, 1, :].T.flat)
+    if prod_scal_0 < prod_scal_1:
+        tmp = Lz_0_hat
+        Lz_0_hat = Lz_1_hat
+        Lz_1_hat = tmp
+        tmp = u_0_hat
+        u_0_hat = u_1_hat
+        u_1_hat = tmp
+    err_0_ = np.linalg.norm(u_0_hat - u_0) / np.linalg.norm(u_0)
+    err_1_ = np.linalg.norm(u_1_hat - u_1) / np.linalg.norm(u_1)
+    l_err.append(0.5 * (err_0_ + err_1_))
+    l_res.append(dict(Lz_0_hat=Lz_0_hat, Lz_1_hat=Lz_1_hat, u_0_hat=u_0_hat,
+                      u_1_hat=u_1_hat, pobj=pobj, times=times))
+
+idx_best = np.argmin(l_err)
+err_ = l_err[idx_best]
+reg_z, reg_u = l_reg[idx_best]
+print("Best regu: reg_z={:.3e}, reg_u={:.3e}".format(reg_z, reg_u))
+res = list(l_res[idx_best].values())
+Lz_0_hat, Lz_1_hat, u_0_hat, u_1_hat, pobj, times = res
+
 
 ###############################################################################
 # check printings
